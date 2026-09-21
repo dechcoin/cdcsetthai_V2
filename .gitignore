@@ -9,3 +9,7 @@ coverage/
 
 # Runtime state containing sensitive credentials (Telegram token, API keys)
 data/
+
+# AI assistant / agent artifacts (not part of the trading bot)
+.agents/
+plan.md

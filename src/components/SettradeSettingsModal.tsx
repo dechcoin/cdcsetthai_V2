@@ -258,7 +258,7 @@ export const SettradeSettingsModal: React.FC<SettradeSettingsModalProps> = ({
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-start space-x-2 text-[10px] text-slate-400">
                 <Shield className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <span>
-                  <strong>ตลาดหลักทรัพย์แห่งประเทศไทย (SET)</strong>: บอทนี้ทำงานด้วยสูตร CDC Action Zone V2 (ลุงโฉลก - Chaloke.org) ซื้อเมื่อสัญญาณฟ้า/เขียวคอนเฟิร์ม และขายออกเพื่อถือเงินสดเมื่อสัญญาณแดง
+                  <strong>ตลาดหลักทรัพย์แห่งประเทศไทย (SET)</strong>: บอทนี้ทำงานด้วยสูตร CDC Action Zone V3 (ลุงโฉลก - Chaloke.org) ซื้อเมื่อสัญญาณฟ้า/เขียวคอนเฟิร์ม และขายออกเพื่อถือเงินสดเมื่อสัญญาณแดง
                 </span>
               </div>
 

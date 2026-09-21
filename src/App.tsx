@@ -1,51 +1,31 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  KlineData,
-  Timeframe,
-  BotConfig,
-  PaperAccount,
-  ExecutedTrade,
-  SettradeApiKeys,
-  PaperPosition,
-  StockTicker24h,
-} from './types';
+import React, { useState, useEffect } from 'react';
+import { Timeframe, BotConfig, SettradeApiKeys } from './types';
 import {
   getStoredBotConfig,
   saveBotConfig,
-  getStoredPaperAccount,
   savePaperAccount,
-  getStoredTradeHistory,
-  saveTradeHistory,
-  addTradeToHistory,
   getStoredBrokerKeys,
   saveBrokerKeys,
   getStoredTelegramConfig,
   saveTelegramConfig,
-  getStoredLogs,
-  addBotLog,
-  getStoredSymbols,
   getStoredWatchlist,
   saveStoredWatchlist,
   DEFAULT_PAPER_ACCOUNT,
 } from './lib/botStore';
 import {
-  fetchBotServerState,
   saveBotServerConfig,
-  toggleBotServer,
   sendManualOrderToServer,
   closePositionOnServer,
-  clearBotServerLogs,
   resetBotServerPaperAccount,
   saveBrokerKeysToServer,
   unlockSymbolOnServer,
 } from './lib/botApi';
-import {
-  fetchStockKlines,
-  fetchStockTicker24h,
-  POPULAR_STOCKS,
-  formatStockPrice,
-} from './lib/stockApi';
-import { calculateCDCActionZone, getCrossoverInfo } from './lib/cdcIndicator';
+import { fetchStockTicker24h } from './lib/stockApi';
+import { calculateOrderSize } from './lib/positionSizing';
+import { calculateSpotPnl } from './lib/pnl';
+import { STORAGE_KEYS, LEGACY_STORAGE_KEYS } from './constants/storageKeys';
+import { useBotSync } from './hooks/useBotSync';
+import { useMarketData } from './hooks/useMarketData';
 import { Header } from './components/Header';
 import { CDCChart } from './components/CDCChart';
 import { BotControlPanel } from './components/BotControlPanel';
@@ -58,45 +38,26 @@ import { TradingStats } from './components/TradingStats';
 import { CoffeeDonation } from './components/CoffeeDonation';
 import { WalletPortfolio } from './components/WalletPortfolio';
 
-/**
- * Calculates equal-weight / fixed / percentage position size based on Total Portfolio Equity.
- */
-function calculateOrderSize(config: BotConfig, account: PaperAccount): number {
-  const maxPositions = Math.max(1, Math.min(20, config.maxOpenPositions || 5));
-  if (account.activePositions.length >= maxPositions) return 0;
-
-  const totalPositionsValue = account.activePositions.reduce(
-    (sum, p) => sum + (p.usdtInvested || p.marginUsdt || 0),
-    0
-  );
-  const totalEquity = account.usdtBalance + totalPositionsValue;
-
-  const mode = config.positionSizingMode || 'EQUAL_WEIGHT';
-  let targetUsdt = 0;
-
-  if (mode === 'EQUAL_WEIGHT') {
-    targetUsdt = totalEquity / maxPositions;
-  } else if (mode === 'PERCENT_EQUITY') {
-    targetUsdt = (totalEquity * (config.balancePercent || 20)) / 100;
-  } else {
-    targetUsdt = config.tradeAmountUsdt || 10000;
-  }
-
-  return Math.min(targetUsdt, account.usdtBalance);
-}
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<'chart' | 'wallet' | 'backtest' | 'scanner' | 'ai' | 'history' | 'stats' | 'coffee'>('chart');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // Core Central State (Synchronized with Server)
-  const [botConfig, setBotConfig] = useState<BotConfig>(getStoredBotConfig);
+  // Core Central State (Synchronized with Server) — owned by the useBotSync hook
+  const {
+    botConfig,
+    setBotConfig,
+    paperAccount,
+    setPaperAccount,
+    tradeHistory,
+    setTradeHistory,
+    botLogs,
+    setBotLogs,
+    refreshFromServer,
+  } = useBotSync();
+
   const [chartTimeframe, setChartTimeframe] = useState<Timeframe>(() => getStoredBotConfig().timeframe || '1d');
-  const [paperAccount, setPaperAccount] = useState<PaperAccount>(getStoredPaperAccount);
   const [brokerKeys, setBrokerKeys] = useState<SettradeApiKeys>(getStoredBrokerKeys);
   const [telegramConfig, setTelegramConfig] = useState<{ botToken: string; chatId: string; isEnabled: boolean }>(getStoredTelegramConfig);
-  const [tradeHistory, setTradeHistory] = useState<ExecutedTrade[]>(getStoredTradeHistory);
-  const [botLogs, setBotLogs] = useState<string[]>(getStoredLogs);
 
   // Unified Watchlist state (single source of truth shared between MarketScanner, BotControlPanel, and Cloud Server)
   const [watchlist, setWatchlist] = useState<string[]>(() => {
@@ -105,13 +66,23 @@ export default function App() {
     return getStoredWatchlist();
   });
 
-  // Market & Kline State
-  const [candles, setCandles] = useState<KlineData[]>([]);
-  const [botCandles, setBotCandles] = useState<KlineData[]>([]);
-  const [isLoadingCandles, setIsLoadingCandles] = useState(false);
-  const [pttPrice, setPttPrice] = useState<number | undefined>(undefined);
-  const [cpallPrice, setCpallPrice] = useState<number | undefined>(undefined);
-  const [allTickers, setAllTickers] = useState<StockTicker24h[]>([]);
+  // Market data (candles + ticker tape + live price) — owned by the useMarketData hook,
+  // which also runs the polling loop and the initial load.
+  const {
+    candles,
+    allTickers,
+    pttPrice,
+    cpallPrice,
+    currentPriceInfo,
+    isLoadingCandles,
+    loadCandles,
+  } = useMarketData({
+    symbol: botConfig.symbol,
+    chartTimeframe,
+    botTimeframe: botConfig.timeframe,
+    fastEmaPeriod: botConfig.fastEmaPeriod,
+    slowEmaPeriod: botConfig.slowEmaPeriod,
+  });
 
   // Notification Toast State
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'buy' | 'sell' | 'info' } | null>(null);
@@ -121,119 +92,9 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 5000);
   };
 
-  const [currentPriceInfo, setCurrentPriceInfo] = useState<{ symbol: string; price: number }>({
-    symbol: 'PTT',
-    price: 0,
-  });
-
-  // 1. Fetch Market Candlestick Data (Separating Chart View from Bot Engine)
-  const loadCandles = useCallback(async () => {
-    setIsLoadingCandles(true);
-    try {
-      // A. Load Chart Viewing Candles (on chartTimeframe)
-      const chartRaw = await fetchStockKlines(botConfig.symbol, chartTimeframe, 300);
-      const chartCdc = calculateCDCActionZone(chartRaw, botConfig.fastEmaPeriod, botConfig.slowEmaPeriod);
-      setCandles(chartCdc);
-      if (chartCdc.length > 0) {
-        const latest = chartCdc[chartCdc.length - 1];
-        setCurrentPriceInfo({ symbol: botConfig.symbol, price: latest.close });
-      }
-
-      // B. Load Bot Strategy Candles (strictly on botConfig.timeframe)
-      if (chartTimeframe === botConfig.timeframe) {
-        setBotCandles(chartCdc);
-      } else {
-        const botRaw = await fetchStockKlines(botConfig.symbol, botConfig.timeframe, 300);
-        const botCdc = calculateCDCActionZone(botRaw, botConfig.fastEmaPeriod, botConfig.slowEmaPeriod);
-        setBotCandles(botCdc);
-      }
-    } catch (err) {
-      console.error('Error loading klines:', err);
-    } finally {
-      setIsLoadingCandles(false);
-    }
-  }, [botConfig.symbol, botConfig.timeframe, chartTimeframe, botConfig.fastEmaPeriod, botConfig.slowEmaPeriod]);
-
-  // 2. Fetch All Stock Prices for Header Running Ticker Tape
-  const loadTickers = useCallback(async () => {
-    try {
-      const raw = await fetchStockTicker24h();
-      if (raw && raw.length > 0) {
-        const popularSet = new Set(POPULAR_STOCKS);
-        const filtered = raw
-          .filter((t) => popularSet.has(t.symbol))
-          .sort((a, b) => {
-            const indexA = POPULAR_STOCKS.indexOf(a.symbol);
-            const indexB = POPULAR_STOCKS.indexOf(b.symbol);
-            if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-            if (indexA !== -1) return -1;
-            if (indexB !== -1) return 1;
-            return b.quoteVolume - a.quoteVolume;
-          })
-          .slice(0, 30);
-
-        setAllTickers(filtered);
-
-        const ptt = raw.find((t) => t.symbol === 'PTT');
-        const cpall = raw.find((t) => t.symbol === 'CPALL');
-        if (ptt) setPttPrice(ptt.lastPrice);
-        if (cpall) setCpallPrice(cpall.lastPrice);
-      }
-    } catch (err) {
-      console.warn('Ticker update failed:', err);
-    }
-  }, []);
-
-  // Synchronize state with Cloud Server (every 3.5s) for 24/7 cross-device consistency
-  useEffect(() => {
-    let isMounted = true;
-    const syncServerState = async () => {
-      try {
-        const serverData = await fetchBotServerState();
-        if (serverData && isMounted) {
-          setBotConfig((prev) => {
-            const merged = { ...prev, ...serverData.botConfig };
-            // เซิร์ฟเวอร์ mask botToken ออก (ไม่ส่งกลับมา) — เก็บ token ที่ผู้ใช้กรอกไว้ในเครื่องไว้
-            const serverTg = serverData.botConfig.telegramConfig;
-            const prevTg = prev.telegramConfig;
-            if (serverTg) {
-              merged.telegramConfig = {
-                ...serverTg,
-                botToken: serverTg.botToken || prevTg?.botToken || '',
-              };
-            }
-            return merged;
-          });
-          setPaperAccount(serverData.paperAccount);
-          setTradeHistory(serverData.tradeHistory);
-          setBotLogs(serverData.botLogs);
-        }
-      } catch {
-        // Fallback to local storage if offline
-      }
-    };
-
-    syncServerState();
-    const syncInterval = setInterval(syncServerState, 3500);
-    return () => {
-      isMounted = false;
-      clearInterval(syncInterval);
-    };
-  }, []);
-
-  // Initial Load & Polling Intervals
-  useEffect(() => {
-    loadCandles();
-    loadTickers();
-
-    const candleInterval = setInterval(loadCandles, 10000);
-    const tickerInterval = setInterval(loadTickers, 8000);
-
-    return () => {
-      clearInterval(candleInterval);
-      clearInterval(tickerInterval);
-    };
-  }, [loadCandles, loadTickers]);
+  // NOTE: the market-data fetch logic, the 3.5s server-sync loop and both polling
+  // intervals were extracted into `useMarketData` / `useBotSync` above, so this
+  // component no longer owns them.
 
   // Real-time PnL update effect for ALL open positions when ticker prices update
   useEffect(() => {
@@ -248,12 +109,12 @@ export default function App() {
       const updatedPositions = prev.activePositions.map((pos) => {
         const livePrice = tickerPriceMap.get(pos.symbol) || (pos.symbol === currentPriceInfo.symbol ? currentPriceInfo.price : 0);
         if (livePrice > 0) {
-          const posLev = pos.leverage || 1;
-          const margin = pos.marginUsdt || pos.usdtInvested;
-          const pnlPercent = pos.side === 'SHORT'
-            ? ((pos.entryPrice - livePrice) / pos.entryPrice) * 100 * posLev
-            : ((livePrice - pos.entryPrice) / pos.entryPrice) * 100 * posLev;
-          const pnlUsdt = (margin * pnlPercent) / 100;
+          const { pnlPercent, pnlThb: pnlUsdt } = calculateSpotPnl(
+            pos.side,
+            pos.entryPrice,
+            livePrice,
+            pos.amount
+          );
 
           if (Math.abs((pos.currentPnlUsdt || 0) - pnlUsdt) > 0.001) {
             hasChanges = true;
@@ -351,12 +212,8 @@ export default function App() {
 
     if (res.success) {
       showToast(`ซื้อหุ้น ${botConfig.symbol} สำเร็จ`, 'buy');
-      const data = await fetchBotServerState();
-      if (data) {
-        setPaperAccount(data.paperAccount);
-        setTradeHistory(data.tradeHistory);
-        setBotLogs(data.botLogs);
-      }
+      // Pull the authoritative account / history / logs from the server right away
+      await refreshFromServer();
     } else {
       showToast(res.error || 'เกิดข้อผิดพลาดในการซื้อหุ้น', 'sell');
     }
@@ -398,12 +255,7 @@ export default function App() {
 
     if (res.success) {
       showToast(`ขายปิดสถานะหุ้น ${sym} เรียบร้อยแล้ว`, 'info');
-      const data = await fetchBotServerState();
-      if (data) {
-        setPaperAccount(data.paperAccount);
-        setTradeHistory(data.tradeHistory);
-        setBotLogs(data.botLogs);
-      }
+      await refreshFromServer();
     } else {
       showToast(res.error || 'ไม่พบสถานะหุ้นที่ต้องการปิด', 'sell');
     }
@@ -492,8 +344,8 @@ export default function App() {
               }}
               botLogs={botLogs}
               onClearLogs={() => {
-                localStorage.removeItem('cdc_stock_bot_logs_v2');
-                localStorage.removeItem('cdc_bot_logs_v2');
+                localStorage.removeItem(STORAGE_KEYS.BOT_LOGS);
+                localStorage.removeItem(LEGACY_STORAGE_KEYS.BOT_LOGS);
                 setBotLogs([]);
               }}
             />
@@ -528,8 +380,8 @@ export default function App() {
           <TradingStats
             trades={tradeHistory}
             onClearStats={() => {
-              localStorage.removeItem('cdc_stock_trade_history_v2');
-              localStorage.removeItem('cdc_trade_history_v2');
+              localStorage.removeItem(STORAGE_KEYS.TRADE_HISTORY);
+              localStorage.removeItem(LEGACY_STORAGE_KEYS.TRADE_HISTORY);
               setTradeHistory([]);
               showToast('ล้างสถิติและประวัติการเทรดทั้งหมดแล้ว', 'info');
             }}
@@ -563,8 +415,8 @@ export default function App() {
           <TradeHistoryTable
             trades={tradeHistory}
             onClearHistory={() => {
-              localStorage.removeItem('cdc_stock_trade_history_v2');
-              localStorage.removeItem('cdc_trade_history_v2');
+              localStorage.removeItem(STORAGE_KEYS.TRADE_HISTORY);
+              localStorage.removeItem(LEGACY_STORAGE_KEYS.TRADE_HISTORY);
               setTradeHistory([]);
               showToast('ล้างประวัติการเทรดแล้ว', 'info');
             }}

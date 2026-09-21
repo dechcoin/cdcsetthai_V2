@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { PaperAccount, PaperPosition, BotConfig, StockTicker24h, Timeframe } from '../types';
 import { formatStockPrice } from '../lib/stockApi';
+import { calculateSpotPnl } from '../lib/pnl';
 import {
   Wallet,
   TrendingUp,
@@ -59,16 +60,14 @@ export const WalletPortfolio: React.FC<WalletPortfolioProps> = ({
   const positionsWithLiveData = useMemo(() => {
     return paperAccount.activePositions.map((pos) => {
       const livePrice = tickerPriceMap.get(pos.symbol) || pos.entryPrice;
-      const posLev = pos.leverage || 1;
-      const margin = pos.marginUsdt || pos.usdtInvested || 0;
       const marketValue = pos.amount * livePrice;
 
-      const pnlPercent =
-        pos.side === 'SHORT'
-          ? ((pos.entryPrice - livePrice) / pos.entryPrice) * 100 * posLev
-          : ((livePrice - pos.entryPrice) / pos.entryPrice) * 100 * posLev;
-
-      const pnlThb = (margin * pnlPercent) / 100;
+      const { pnlPercent, pnlThb } = calculateSpotPnl(
+        pos.side,
+        pos.entryPrice,
+        livePrice,
+        pos.amount
+      );
 
       return {
         ...pos,
@@ -95,7 +94,7 @@ export const WalletPortfolio: React.FC<WalletPortfolioProps> = ({
   }, [positionsWithLiveData]);
 
   const totalInvestedCapital = useMemo(() => {
-    return positionsWithLiveData.reduce((sum, p) => sum + (p.usdtInvested || p.marginUsdt || 0), 0);
+    return positionsWithLiveData.reduce((sum, p) => sum + (p.usdtInvested || 0), 0);
   }, [positionsWithLiveData]);
 
   const totalUnrealizedPnlThb = useMemo(() => {

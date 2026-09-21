@@ -158,8 +158,7 @@ export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = ({
                   const livePrice = ticker ? ticker.lastPrice : pos.entryPrice;
                   const pnlUsdt = pos.currentPnlUsdt ?? 0;
                   const pnlPercent = pos.currentPnlPercent ?? 0;
-                  const margin = pos.marginUsdt || pos.usdtInvested;
-                  const lev = pos.leverage || 1;
+                  const margin = pos.usdtInvested;
 
                   return (
                     <tr key={pos.symbol} className="hover:bg-slate-800/50">

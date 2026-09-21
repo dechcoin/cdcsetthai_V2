@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { getStoredTradeHistory } from '../lib/botStore';
 import { ExecutedTrade } from '../types';
+import { STORAGE_KEYS, LEGACY_STORAGE_KEYS } from '../constants/storageKeys';
 import { formatStockPrice } from '../lib/stockApi';
 import {
   AreaChart,
@@ -48,7 +49,10 @@ export const TradingStats: React.FC<TradingStatsProps> = ({ trades: propTrades, 
       if (onClearStats) {
         onClearStats();
       } else {
-        localStorage.removeItem('cdc_trade_history_v2');
+        // Clear both the current and the legacy key, otherwise the trades read
+        // back by `getStoredTradeHistory()` would reappear on the next mount.
+        localStorage.removeItem(STORAGE_KEYS.TRADE_HISTORY);
+        localStorage.removeItem(LEGACY_STORAGE_KEYS.TRADE_HISTORY);
         setLocalTrades([]);
       }
     }

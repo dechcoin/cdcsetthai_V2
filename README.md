@@ -1,12 +1,12 @@
-# 🚀 CDC Action Zone V2 Thai Stock Trading Bot (ระบบเทรดหุ้นไทยสูตรลุงโฉลก)
+# 🚀 CDC Action Zone V3 Thai Stock Trading Bot (ระบบเทรดหุ้นไทยสูตรลุงโฉลก)
 
-ระบบบอทเทรดหุ้นไทย (SET / SET50 / SET100) อัตโนมัติตามทฤษฎีและอินดิเคเตอร์ **CDC Action Zone V2 (ลุงโฉลก - Chaloke.org)** พร้อมระบบบริหารจัดการความเสี่ยง (Risk Management) และความปลอดภัยระดับสูง
+ระบบบอทเทรดหุ้นไทย (SET / SET50 / SET100) อัตโนมัติตามทฤษฎีและอินดิเคเตอร์ **CDC Action Zone V3 (ลุงโฉลก - Chaloke.org)** พร้อมระบบบริหารจัดการความเสี่ยง (Risk Management) และความปลอดภัยระดับสูง
 
 ---
 
 ## 🌟 จุดเด่นและฟีเจอร์หลัก (Key Features)
 
-- 👑 **กลยุทธ์ตามทฤษฎีลุงโฉลก (Uncle Chaloke CDC Action Zone V2):**
+- 👑 **กลยุทธ์ตามทฤษฎีลุงโฉลก (Uncle Chaloke CDC Action Zone V3):**
   - ตรวจจับจุดตัด **Golden Cross (EMA 12 ตัดขึ้น EMA 26)** และ **Dead Cross (EMA 12 ตัดลง EMA 26)**
   - คอนเฟิร์มสัญญาณเข้าซื้อที่แท่งสดใหม่ (**Crossover Recency Engine: `barsSince <= 1`**)
   - กฎเหล็กตามระบบ: **"เขียวซื้อ แดงขาย"** เข้าซื้อแท่งฟ้า/เขียวแรกหลังจุดตัด และขายทำกำไร/ถือเงินสดเมื่อเกิดแท่งแดงแรก

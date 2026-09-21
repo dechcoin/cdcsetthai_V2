@@ -31,7 +31,7 @@ export function calculateEMA(prices: number[], period: number): number[] {
 }
 
 /**
- * Calculates CDC Action Zone V2 / V3 indicators for a series of candlestick data.
+ * Calculates CDC Action Zone V3 indicators for a series of candlestick data.
  */
 export function calculateCDCActionZone(
   rawCandles: KlineData[],
@@ -65,7 +65,7 @@ export function calculateCDCActionZone(
     const isBullishCross = prevFast <= prevSlow && fast > slow;
     const isBearishCross = prevFast >= prevSlow && fast < slow;
 
-    // CDC Action Zone V2 Logic
+    // CDC Action Zone V3 Logic
     if (fast > slow) {
       // Bullish Regime
       if (close >= fast) {
@@ -218,6 +218,44 @@ export function getCrossoverInfo(candles: KlineData[]): CrossoverInfo {
     isFreshDeadCross: barsSinceDeadCross <= 1,
   };
 }
+
+/**
+ * "เขียวซื้อ" — Long entry per Uncle Chaloke's Confirmed Next-Bar Rule.
+ * Matches the backtester so live trading and backtest stay consistent:
+ *  - First BLUE candle (fresh buy trigger) when BLUE is in `buyZones`, or
+ *  - First GREEN candle that follows a BLUE/YELLOW/RED candle when GREEN is in `buyZones`.
+ */
+export function isLongEntrySignal(candles: KlineData[], buyZones: ('BLUE' | 'GREEN')[]): boolean {
+  if (!candles || candles.length < 1) return false;
+  const latest = candles[candles.length - 1];
+  const prev = candles.length > 1 ? candles[candles.length - 2] : undefined;
+  const zone = latest.zone;
+  const prevZone = prev?.zone;
+
+  const isFirstBlue = buyZones.includes('BLUE') && zone === 'BLUE' && prevZone !== 'BLUE';
+  const isFirstConfirmedGreen =
+    buyZones.includes('GREEN') &&
+    zone === 'GREEN' &&
+    !!prevZone &&
+    (prevZone === 'BLUE' || prevZone === 'YELLOW' || prevZone === 'RED');
+
+  return isFirstBlue || isFirstConfirmedGreen;
+}
+
+/**
+ * "แดงขาย" — Bearish entry per the same Confirmed Next-Bar Rule:
+ * the first RED candle after a non-RED candle.
+ */
+export function isShortEntrySignal(candles: KlineData[], sellZones: ('YELLOW' | 'RED')[]): boolean {
+  if (!candles || candles.length < 1) return false;
+  const latest = candles[candles.length - 1];
+  const prev = candles.length > 1 ? candles[candles.length - 2] : undefined;
+  const zone = latest.zone;
+  const prevZone = prev?.zone;
+
+  return sellZones.includes('RED') && zone === 'RED' && prevZone !== 'RED';
+}
+
 
 /**
  * Calculates bars since the current CDC Action Zone started

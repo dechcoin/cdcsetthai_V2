@@ -792,7 +792,7 @@ export const CDCChart: React.FC<CDCChartProps> = ({
       <div className="bg-[#181c27] px-4 py-2.5 border-t border-[#2a2e39] flex flex-wrap items-center justify-between text-[11px] text-slate-400 gap-3">
         <div className="flex items-center space-x-2">
           <Info className="w-3.5 h-3.5 text-slate-500" />
-          <span className="font-medium text-slate-300">CDC Action Zone V2 Strategy Legend:</span>
+          <span className="font-medium text-slate-300">CDC Action Zone V3 Strategy Legend:</span>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center space-x-1.5 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/30">

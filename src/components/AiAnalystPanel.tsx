@@ -167,7 +167,7 @@ export const AiAnalystPanel: React.FC<AiAnalystPanelProps> = ({
           <Cpu className="w-10 h-10 text-cyan-500/40 mx-auto" />
           <h4 className="text-sm font-semibold text-slate-300">พร้อมประมวลผลการวิเคราะห์ด้วย Gemini AI</h4>
           <p className="text-xs text-slate-500 max-w-md mx-auto">
-            กดปุ่ม "ประมวลผลการวิเคราะห์ AI" ด้านบน เพื่อให้อัลกอริทึมวิเคราะห์สัญญาณ CDC Action Zone V2 ของหุ้น {symbol}
+            กดปุ่ม "ประมวลผลการวิเคราะห์ AI" ด้านบน เพื่อให้อัลกอริทึมวิเคราะห์สัญญาณ CDC Action Zone V3 ของหุ้น {symbol}
           </p>
         </div>
       )}

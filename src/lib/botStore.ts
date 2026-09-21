@@ -1,17 +1,7 @@
-import { BotConfig, PaperAccount, ExecutedTrade, SettradeApiKeys, PaperPosition, Timeframe } from '../types';
+import type { BotConfig, PaperAccount, ExecutedTrade, SettradeApiKeys, PaperPosition, Timeframe } from '../types';
+import { STORAGE_KEYS } from '../constants/storageKeys';
 import { encryptText, decryptText } from './encryption';
 import { POPULAR_STOCKS } from './stockApi';
-
-const STORAGE_KEYS = {
-  BOT_CONFIG: 'cdc_stock_bot_config_v2',
-  PAPER_ACCOUNT: 'cdc_stock_paper_account_v2',
-  TRADE_HISTORY: 'cdc_stock_trade_history_v2',
-  SETTRADE_KEYS: 'cdc_settrade_keys_v2',
-  TELEGRAM_CONFIG: 'cdc_telegram_config_v2',
-  BOT_LOGS: 'cdc_stock_bot_logs_v2',
-  CUSTOM_SYMBOLS: 'cdc_stock_custom_symbols_v2',
-  WATCHLIST: 'cdc_stock_watchlist_v2',
-};
 
 export const DEFAULT_BOT_CONFIG: BotConfig = {
   id: 'default_bot',
@@ -23,7 +13,6 @@ export const DEFAULT_BOT_CONFIG: BotConfig = {
   usePercentBalance: true,
   balancePercent: 20,
   positionSizingMode: 'EQUAL_WEIGHT', // 🎯 ถัวเฉลี่ยเท่ากันทุกหุ้น (Equal Weight Sizing)
-  leverage: 1,
   maxOpenPositions: 5, // 🎯 ถือครองสูงสุด 5 ตัว (ไม้ละ 20% ของพอร์ตรวม)
   stopLossPercent: 5,
   takeProfitPercent: 15,
@@ -31,7 +20,7 @@ export const DEFAULT_BOT_CONFIG: BotConfig = {
   trailingStopPercent: 3,
   useStopLossLock: true, // 🎯 ล็อกไม่ให้เข้าซื้อซ้ำในรอบเดิมเมื่อโดน Stop Loss
   stopLossLocks: {},
-  buyOnSignal: ['BLUE', 'GREEN'], // 🎯 สัญญาณฟ้าแรก หรือ เขียวแรกตามระบบ CDC Action Zone V2 ลุงโฉลก
+  buyOnSignal: ['BLUE', 'GREEN'], // 🎯 สัญญาณฟ้าแรก หรือ เขียวแรกตามระบบ CDC Action Zone V3 ลุงโฉลก
   sellOnSignal: ['RED'], // 🎯 ขายออกตามสัญญาณแดงแรก (Bearish Cash Out)
   mode: 'PAPER',
   scanMode: 'WATCHLIST', // 🎯 ค่าเริ่มต้น: เล่นเฉพาะหุ้นใน Watchlist ตามที่ตั้งไว้
@@ -57,7 +46,6 @@ export function getStoredBotConfig(): BotConfig {
     const raw = localStorage.getItem(STORAGE_KEYS.BOT_CONFIG);
     if (!raw) return DEFAULT_BOT_CONFIG;
     const parsed = JSON.parse(raw);
-    const lev = Math.min(Math.max(1, parseInt(parsed.leverage || 1, 10)), 10);
 
     let cleanSymbol = parsed.symbol || 'PTT';
     if (
@@ -83,7 +71,6 @@ export function getStoredBotConfig(): BotConfig {
       mode: parsed.mode === 'SETTRADE_LIVE' ? 'SETTRADE_LIVE' : 'PAPER',
       scanMode: parsed.scanMode || 'WATCHLIST',
       customWatchlist,
-      leverage: isNaN(lev) ? 1 : lev,
       timeframe: parsed.timeframe || '1d',
       maxOpenPositions: isNaN(maxPos) ? 5 : maxPos,
       useStopLossLock: parsed.useStopLossLock !== undefined ? parsed.useStopLossLock : true,

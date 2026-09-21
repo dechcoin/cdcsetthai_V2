@@ -254,7 +254,7 @@ export const CoffeeDonation: React.FC = () => {
             </p>
             <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500 font-medium">
               <span>พัฒนาด้วย ❤️ โดย คุณสุรเดช ชูสวัสดิ์</span>
-              <span className="text-emerald-400">CDC Action Zone V2 Engine</span>
+              <span className="text-emerald-400">CDC Action Zone V3 Engine</span>
             </div>
           </div>
         </div>

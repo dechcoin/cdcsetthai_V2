@@ -1,14 +1,14 @@
+import { STORAGE_KEYS } from '../constants/storageKeys';
+
 /**
  * Shared fetch wrapper that attaches the dashboard auth token to every
  * same-origin /api/* request, so the server can reject unauthenticated callers
  * when DASHBOARD_TOKEN is configured.
  */
 
-const TOKEN_STORAGE_KEY = 'cdc_dashboard_token';
-
 export function getDashboardToken(): string {
   try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY) || '';
+    return localStorage.getItem(STORAGE_KEYS.DASHBOARD_TOKEN) || '';
   } catch {
     return '';
   }
@@ -17,9 +17,9 @@ export function getDashboardToken(): string {
 export function setDashboardToken(token: string): void {
   try {
     if (token) {
-      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+      localStorage.setItem(STORAGE_KEYS.DASHBOARD_TOKEN, token);
     } else {
-      localStorage.removeItem(TOKEN_STORAGE_KEY);
+      localStorage.removeItem(STORAGE_KEYS.DASHBOARD_TOKEN);
     }
   } catch {
     /* ignore storage errors */

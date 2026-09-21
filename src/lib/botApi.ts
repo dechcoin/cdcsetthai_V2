@@ -153,7 +153,7 @@ export async function sendTelegramTestAlert(params: {
 
   const testMsg =
     `🔔 <b>ทดสอบการเชื่อมต่อ Telegram สำเร็จ!</b>\n\n` +
-    `🚀 ระบบ <b>CDC Action Zone V2 SET Thai Stock Bot</b> เชื่อมต่อระบบแจ้งเตือนสำเร็จ พร้อมส่งสัญญาณเทรดและสรุปผลกำไร-ขาดทุนให้คุณแบบ Realtime 24/7 ครับ 📈✨`;
+    `🚀 ระบบ <b>CDC Action Zone V3 SET Thai Stock Bot</b> เชื่อมต่อระบบแจ้งเตือนสำเร็จ พร้อมส่งสัญญาณเทรดและสรุปผลกำไร-ขาดทุนให้คุณแบบ Realtime 24/7 ครับ 📈✨`;
 
   // 1. Try sending through backend endpoint first
   try {

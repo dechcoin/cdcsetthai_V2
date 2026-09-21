@@ -72,7 +72,7 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
 
   // Computed Portfolio Equity & Allocation
   const totalPositionsValue = paperAccount.activePositions.reduce(
-    (sum, p) => sum + (p.usdtInvested || p.marginUsdt || 0),
+    (sum, p) => sum + (p.usdtInvested || 0),
     0
   );
   const totalEquity = paperAccount.usdtBalance + totalPositionsValue;
@@ -156,7 +156,6 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
       trailingStopPercent: Number(configForm.trailingStopPercent) || 3,
       useTrailingStop: Boolean(configForm.useTrailingStop),
       useStopLossLock: configForm.useStopLossLock !== false,
-      leverage: Math.min(Math.max(1, Number(configForm.leverage) || 1), 10),
     };
     onSaveConfig(sanitizedConfig);
     setConfigForm(sanitizedConfig);
@@ -632,7 +631,7 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
             <div className="flex items-center space-x-2.5">
               <Sliders className="w-5 h-5 text-emerald-400" />
               <h3 className="text-base font-black text-white">
-                ตั้งค่ากลยุทธ์ CDC Action Zone V2 & Risk Engine
+                ตั้งค่ากลยุทธ์ CDC Action Zone V3 & Risk Engine
               </h3>
             </div>
             {!isEditing ? (

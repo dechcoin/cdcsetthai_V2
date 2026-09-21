@@ -438,7 +438,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
             <div>
               <div className="flex items-center space-x-2">
                 <h2 className="text-lg font-black text-white tracking-wide">
-                  CDC Action Zone V2 Market Scanner
+                  CDC Action Zone V3 Market Scanner
                 </h2>
                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                   CDC Quality Score Engine
