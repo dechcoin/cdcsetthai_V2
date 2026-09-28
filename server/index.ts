@@ -31,6 +31,15 @@ import { marketRouter } from './routes/market.routes';
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+// Configure the exact number of trusted reverse-proxy hops. Render's web
+// service uses one hop; keeping this explicit lets Express rate-limit each
+// visitor instead of grouping everyone under the load balancer IP.
+const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
+if (!Number.isSafeInteger(trustProxyHops) || trustProxyHops < 0) {
+  throw new Error('TRUST_PROXY_HOPS must be a non-negative integer.');
+}
+app.set('trust proxy', trustProxyHops);
+
 // ==================== SECURITY MIDDLEWARE ====================
 
 app.use(

@@ -68,3 +68,22 @@ test('reports an invalid dashboard token clearly', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('explains app rate limits when a candle request receives HTTP 429', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    error: 'Too many requests. Please try again later.',
+  }), {
+    status: 429,
+    headers: { 'content-type': 'application/json' },
+  });
+
+  try {
+    await assert.rejects(
+      fetchStockKlines('PTT', '1d', 100),
+      /คำขอ API หุ้นเกิน rate limit ของแอป/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

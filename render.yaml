@@ -12,3 +12,5 @@ services:
         sync: false
       - key: DASHBOARD_TOKEN
         generateValue: true
+      - key: TRUST_PROXY_HOPS
+        value: "1"

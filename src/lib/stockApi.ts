@@ -18,6 +18,9 @@ function getStockApiErrorMessage(status: number, serverMessage?: string): string
   if (status === 401) {
     return 'DASHBOARD_TOKEN ไม่ถูกต้องหรือยังไม่ได้กรอกใน การตั้งค่า > Security';
   }
+  if (status === 429) {
+    return 'คำขอ API หุ้นเกิน rate limit ของแอป กรุณารอสักครู่ก่อนสแกนหรือ Backtest ซ้ำ';
+  }
   const detail = serverMessage ? `: ${serverMessage}` : '';
   return `เรียก API หุ้นไม่สำเร็จ (HTTP ${status})${detail}`;
 }

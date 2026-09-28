@@ -8,10 +8,11 @@ import rateLimit from 'express-rate-limit';
  * need the same limiter instances.
  */
 
-/** Global limiter applied to every /api/* request. */
+/** Global limiter applied to every /api/* request. Supports full-universe
+ * scanner and backtest batches plus the dashboard's background polling. */
 export const generalLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 300,
+  max: 600,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests. Please try again later.' },
