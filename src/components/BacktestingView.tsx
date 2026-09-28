@@ -178,8 +178,11 @@ export const BacktestingView: React.FC = () => {
 
   const sortedMarketResults = useMemo(() => {
     return [...marketResults].sort((a, b) => {
-      const diff = Number(a[marketSortKey] ?? Number.NEGATIVE_INFINITY)
-        - Number(b[marketSortKey] ?? Number.NEGATIVE_INFINITY);
+      const aValue = a[marketSortKey];
+      const bValue = b[marketSortKey];
+      if (aValue === null) return bValue === null ? 0 : 1;
+      if (bValue === null) return -1;
+      const diff = Number(aValue) - Number(bValue);
       return marketSortAsc ? diff : -diff;
     });
   }, [marketResults, marketSortKey, marketSortAsc]);
@@ -671,6 +674,7 @@ export const BacktestingView: React.FC = () => {
               { label: 'Turnover / Avg Equity', value: `${result.turnoverPercent}%` },
               { label: 'คำสั่งสูงสุด / ADV20', value: result.maxOrderToAdvPercent === null ? 'ข้อมูลไม่พอ' : `${result.maxOrderToAdvPercent}%` },
               { label: 'ค่าคอมฯ + VAT', value: `฿${result.totalCommissionThb.toLocaleString()} + ฿${result.totalVatThb.toLocaleString()}` },
+              { label: 'ค่าบริการอื่น / ค่าธรรมเนียมรวม', value: `฿${result.totalOtherFeesThb.toLocaleString()} / ฿${result.totalFeesThb.toLocaleString()}` },
               { label: 'มูลค่าซื้อขายเฉลี่ย/วัน', value: `฿${result.averageDailyTurnoverThb.toLocaleString()}` },
               { label: 'MC โอกาสขาดทุน', value: result.monteCarlo ? `${result.monteCarlo.probabilityOfLossPercent}%` : 'ข้อมูลไม่พอ' },
               { label: 'MC ผลตอบแทน P5', value: result.monteCarlo ? `${result.monteCarlo.fifthPercentileReturnPercent}%` : 'ข้อมูลไม่พอ' },
