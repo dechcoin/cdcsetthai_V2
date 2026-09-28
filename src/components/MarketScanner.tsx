@@ -20,6 +20,10 @@ import {
   getBarsSinceZoneChange,
   getCrossoverInfo,
 } from '../lib/cdcIndicator';
+import { assessDailyPricePosition, detectTechnicalStatus } from '../lib/quantEngine';
+import type { PricePositionZone } from '../lib/quantEngine';
+import { TechnicalStatusBadges } from './scanner/TechnicalStatusBadges';
+import { stripFormingCandle } from '../lib/marketTime';
 import {
   getStoredSymbols,
   saveStoredSymbols,
@@ -82,7 +86,10 @@ type SignalFilterType =
   | 'QUALITY_HIGH'
   | 'FRESH_SIGNAL'
   | 'HIGH_VOLUME'
-  | 'TOP_GAINERS';
+  | 'TOP_GAINERS'
+  | 'BULLISH'
+  | 'BREAKOUT'
+  | 'DIVERGENCE';
 
 type SortOption = 'SCORE_DESC' | 'CHANGE_DESC' | 'CHANGE_ASC' | 'VOLUME_DESC' | 'RECENCY_ASC' | 'SYMBOL_ASC';
 
@@ -118,6 +125,8 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
 
   // Scanner Filters & Preferences
   const [timeframe, setTimeframe] = useState<Timeframe>('1d');
+  const [showPricePosition, setShowPricePosition] = useState(false);
+  const [pricePositionFilter, setPricePositionFilter] = useState<'ALL' | PricePositionZone>('ALL');
   const [signalFilter, setSignalFilter] = useState<SignalFilterType>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('SCORE_DESC');
@@ -164,7 +173,8 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
           chunk.map(async (sym) => {
             try {
               const rawCandles = await fetchStockKlines(sym, timeframe, 120);
-              const cdcCandles = calculateCDCActionZone(rawCandles, 12, 26);
+              const timeframeCandles = stripFormingCandle(rawCandles, timeframe);
+              const cdcCandles = calculateCDCActionZone(timeframeCandles, 12, 26);
 
               if (cdcCandles.length > 0) {
                 const latest = cdcCandles[cdcCandles.length - 1];
@@ -177,7 +187,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                   : prev.close > 0
                   ? ((currentPrice - prev.close) / prev.close) * 100
                   : 0;
-                const volume24h = ticker
+                const volume24h = ticker && ticker.quoteVolume > 0
                   ? ticker.quoteVolume
                   : latest.volume * latest.close;
 
@@ -201,6 +211,8 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                   volume24h,
                   priceChange24h,
                 });
+                const pricePosition = assessDailyPricePosition(timeframeCandles);
+                const technicalStatus = detectTechnicalStatus(timeframeCandles, cdcCandles);
 
                 results.push({
                   symbol: sym,
@@ -224,6 +236,10 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                   qualityScore: qualityBreakdown.totalScore,
                   qualityGrade: qualityBreakdown.grade,
                   qualityBreakdown,
+                  pricePosition,
+                  isBullish: technicalStatus.isBullish,
+                  isBreakout: technicalStatus.isBreakout,
+                  isDivergence: technicalStatus.isDivergence,
                 });
               }
             } catch (e) {
@@ -328,11 +344,12 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
         // Search query filter
         const matchesSearch = stock.symbol.toLowerCase().includes(searchQuery.toLowerCase());
         if (!matchesSearch) return false;
+        if (showPricePosition && pricePositionFilter !== 'ALL' && stock.pricePosition?.zone !== pricePositionFilter) return false;
 
         // Signal Filter Badges
         switch (signalFilter) {
           case 'PRIME_ENTRY':
-            return stock.barsSinceGoldenCross <= 1 && (stock.zone === 'BLUE' || stock.zone === 'GREEN');
+            return stock.barsSinceGoldenCross <= 2 && stock.zone === 'GREEN';
           case 'BUY_FRESH':
             return stock.zone === 'BLUE';
           case 'BULL_STRONG':
@@ -349,6 +366,12 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
             return stock.volume24h >= 20_000_000;
           case 'TOP_GAINERS':
             return stock.priceChange24h > 0;
+          case 'BULLISH':
+            return !!stock.isBullish;
+          case 'BREAKOUT':
+            return !!stock.isBreakout;
+          case 'DIVERGENCE':
+            return !!stock.isDivergence;
           case 'ALL':
           default:
             return true;
@@ -371,15 +394,15 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
             return a.symbol.localeCompare(b.symbol);
         }
       });
-  }, [scanResults, searchQuery, signalFilter, sortBy]);
+  }, [scanResults, searchQuery, signalFilter, sortBy, showPricePosition, pricePositionFilter]);
 
   // Summary Metrics
   const summaryMetrics = useMemo(() => {
     const total = scanResults.length;
-    const buySignals = scanResults.filter((r) => r.zone === 'BLUE' || r.zone === 'GREEN').length;
+    const buySignals = scanResults.filter((r) => r.zone === 'GREEN').length;
     const freshBuys = scanResults.filter((r) => r.zone === 'BLUE').length;
     const primeEntries = scanResults.filter(
-      (r) => r.barsSinceGoldenCross <= 1 && (r.zone === 'BLUE' || r.zone === 'GREEN')
+      (r) => r.barsSinceGoldenCross <= 2 && r.zone === 'GREEN'
     ).length;
     const topQuality = scanResults.filter((r) => r.qualityScore >= 75).length;
     const avgScore =
@@ -440,12 +463,12 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                 <h2 className="text-lg font-black text-white tracking-wide">
                   CDC Action Zone V3 Market Scanner
                 </h2>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  CDC Quality Score Engine
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 uppercase">
+                  CDC {timeframe} + Price Position
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                สแกนสัญญาณเทรดตามสูตรลุงโฉลก พร้อมคำนวณคะแนนคุณภาพสัญญาณ 5 ปัจจัย (0–100 คะแนน)
+                สัญญาณ CDC ({timeframe.toUpperCase()}) ใช้แท่งปิดแล้ว พร้อมจัดโซนราคาเทียบฐานและ High 60 แท่งเพื่อช่วยเลือกจังหวะ
               </p>
             </div>
           </div>
@@ -454,11 +477,11 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
           <div className="flex flex-wrap items-center gap-2.5">
             {/* Timeframe Selector */}
             <div className="flex bg-slate-950 p-1 rounded-2xl border border-slate-800 shadow-inner">
-              {(['15m', '1h', '4h', '1d', '1w'] as Timeframe[]).map((tf) => (
+              {(['15m', '30m', '45m', '1h', '4h', '1d'] as Timeframe[]).map((tf) => (
                 <button
                   key={tf}
                   onClick={() => setTimeframe(tf)}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-xl transition ${
+                  className={`px-3 py-1.5 text-xs font-bold rounded-xl transition cursor-pointer ${
                     timeframe === tf
                       ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 shadow-md font-extrabold'
                       : 'text-slate-400 hover:text-white'
@@ -468,6 +491,18 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                 </button>
               ))}
             </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowPricePosition(value => !value);
+                if (showPricePosition) setPricePositionFilter('ALL');
+              }}
+              className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${showPricePosition ? 'bg-cyan-500/20 text-cyan-200 border-cyan-400/60' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-cyan-500/50'}`}
+              title="เปิดการวิเคราะห์ตำแหน่งราคาเพิ่มเติม โดยไม่เปลี่ยนคะแนน CDC"
+            >
+              {showPricePosition ? 'ตำแหน่งราคา: เปิด' : 'ดูตำแหน่งราคา'}
+            </button>
 
             {/* Custom List Manager Button */}
             <button
@@ -658,14 +693,14 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
 
           <div className="space-y-0.5">
             <span className="text-[10px] text-emerald-400 font-semibold uppercase tracking-wider flex items-center">
-              <Sparkles className="w-3 h-3 mr-1 text-emerald-300" /> จุดเข้าที่ดีที่สุด (0-1 แท่ง)
+              <Sparkles className="w-3 h-3 mr-1 text-emerald-300" /> เขียวซื้อ + Golden Cross สด (≤2 แท่ง)
             </span>
             <div className="flex items-baseline space-x-1">
               <span className="text-xl font-black text-emerald-400 font-mono">
                 {summaryMetrics.primeEntries}
               </span>
               <span className="text-[11px] text-emerald-500/70">
-                (ซื้อทั้งหมด {summaryMetrics.buySignals})
+                (โซนเขียว {summaryMetrics.buySignals})
               </span>
             </div>
           </div>
@@ -719,7 +754,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
           <div className="flex items-center justify-between text-xs">
             <span className="text-slate-400 font-bold flex items-center space-x-1.5">
               <Filter className="w-3.5 h-3.5 text-emerald-400" />
-              <span>แถบป้ายกรองสัญญาณ (Signal Filter Badges):</span>
+              <span>แถบป้ายกรองสัญญาณ CDC (กราฟ 1D):</span>
             </span>
             <span className="text-[11px] text-slate-500">
               พบ {filteredAndSortedStocks.length} จาก {scanResults.length} หุ้น
@@ -727,6 +762,26 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {showPricePosition && (
+              <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-cyan-900/60 bg-slate-950/70 p-1.5">
+                <span className="px-2 text-[10px] text-slate-400">โซนราคา (High/Low 60D, ATR14):</span>
+                {([
+                  ['ALL', 'ทั้งหมด'],
+                  ['NEAR_BASE', 'ใกล้ฐาน'],
+                  ['MID_RANGE', 'โซนกลาง'],
+                  ['EXTENDED', 'โซนสูง'],
+                ] as const).map(([zone, label]) => (
+                  <button
+                    key={zone}
+                    type="button"
+                    onClick={() => setPricePositionFilter(zone)}
+                    className={`rounded-lg px-2 py-1 text-[10px] font-bold ${pricePositionFilter === zone ? 'bg-cyan-500 text-slate-950' : 'text-slate-300 hover:bg-slate-800'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
             {/* Badge: Prime Entry Only */}
             <button
               onClick={() => setSignalFilter('PRIME_ENTRY')}
@@ -737,9 +792,9 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
               }`}
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-              <span>🌟 จุดเข้าที่ดีที่สุด (เขียวแรก 0–1 แท่ง)</span>
+              <span>🌟 เขียวซื้อ + Golden Cross สด (≤2 แท่ง)</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-900/90 text-emerald-200 font-mono font-bold">
-                {scanResults.filter((r) => r.barsSinceGoldenCross <= 1 && (r.zone === 'BLUE' || r.zone === 'GREEN')).length}
+                {scanResults.filter((r) => r.barsSinceGoldenCross <= 2 && r.zone === 'GREEN').length}
               </span>
             </button>
 
@@ -758,7 +813,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
               </span>
             </button>
 
-            {/* Badge: Blue Buy Signal */}
+            {/* Badge: Blue pre-signal — wait for GREEN confirmation by default */}
             <button
               onClick={() => setSignalFilter('BUY_FRESH')}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer ${
@@ -767,7 +822,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                   : 'bg-slate-950 hover:bg-blue-950/40 text-blue-400 border border-blue-900/40'
               }`}
             >
-              <span>🟦 สัญญาณซื้อใหม่ (ฟ้า)</span>
+              <span>🟦 สัญญาณเตือนก่อนเขียว (ฟ้า)</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-blue-950/80 font-mono">
                 {scanResults.filter((r) => r.zone === 'BLUE').length}
               </span>
@@ -879,6 +934,51 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
               <span>📈 บวกแรงวันนี้</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-950/80 font-mono">
                 {scanResults.filter((r) => r.priceChange24h > 0).length}
+              </span>
+            </button>
+
+            {/* Badge: Bullish */}
+            <button
+              onClick={() => setSignalFilter('BULLISH')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer ${
+                signalFilter === 'BULLISH'
+                  ? 'bg-[#022c22] text-emerald-400 border border-emerald-400 shadow-lg shadow-emerald-950/60 font-black'
+                  : 'bg-slate-950 hover:bg-[#022c22]/50 text-emerald-400 border border-emerald-500/40'
+              }`}
+            >
+              <span>📈 BULLISH</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-950 font-mono font-bold text-emerald-300">
+                {scanResults.filter((r) => r.isBullish).length}
+              </span>
+            </button>
+
+            {/* Badge: Breakout */}
+            <button
+              onClick={() => setSignalFilter('BREAKOUT')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer ${
+                signalFilter === 'BREAKOUT'
+                  ? 'bg-[#082f49] text-cyan-300 border border-cyan-400 shadow-lg shadow-cyan-950/60 font-black'
+                  : 'bg-slate-950 hover:bg-[#082f49]/50 text-cyan-400 border border-cyan-500/40'
+              }`}
+            >
+              <span>⚡ BREAKOUT</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-cyan-950 font-mono font-bold text-cyan-300">
+                {scanResults.filter((r) => r.isBreakout).length}
+              </span>
+            </button>
+
+            {/* Badge: Divergence */}
+            <button
+              onClick={() => setSignalFilter('DIVERGENCE')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer ${
+                signalFilter === 'DIVERGENCE'
+                  ? 'bg-[#2e1065] text-purple-200 border border-purple-400 shadow-lg shadow-purple-950/60 font-black'
+                  : 'bg-slate-950 hover:bg-[#2e1065]/50 text-purple-300 border border-purple-500/40'
+              }`}
+            >
+              <span>✨ DIVERGENCE</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-950 font-mono font-bold text-purple-200">
+                {scanResults.filter((r) => r.isDivergence).length}
               </span>
             </button>
           </div>
@@ -1069,7 +1169,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                         {stock.symbol}
                       </span>
                       <span className="text-[10px] text-slate-400 font-semibold">
-                        {timeframe.toUpperCase()}
+                CDC 1D
                       </span>
                     </div>
 
@@ -1080,6 +1180,15 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                       {getZoneNameTh(stock.zone)}
                     </span>
                   </div>
+
+                  {/* Technical Status Badges: BULLISH, BREAKOUT, DIVERGENCE */}
+                  {(stock.isBullish || stock.isBreakout || stock.isDivergence) && (
+                    <TechnicalStatusBadges
+                      isBullish={stock.isBullish}
+                      isBreakout={stock.isBreakout}
+                      isDivergence={stock.isDivergence}
+                    />
+                  )}
 
                   {/* CDC QUALITY SCORE CARD METER */}
                   <div
@@ -1096,7 +1205,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                         <span className={`text-[10px] px-2 py-0.2 rounded-md ${theme.badge}`}>
                           Grade {stock.qualityGrade}
                         </span>
-                        <span className="text-xs font-black font-mono">
+                      <span className="text-xs font-black font-mono">
                           {stock.qualityScore}/100
                         </span>
                       </div>
@@ -1109,13 +1218,23 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                         style={{ width: `${stock.qualityScore}%` }}
                       />
                     </div>
+                    {showPricePosition && <div className="mt-2 flex items-center justify-between text-[10px]">
+                      <span className={stock.pricePosition?.zone === 'NEAR_BASE' ? 'text-emerald-300' : stock.pricePosition?.zone === 'EXTENDED' ? 'text-rose-300' : 'text-amber-200'}>
+                        {stock.pricePosition?.labelTh ?? 'ข้อมูลฐานไม่พอ'} · {stock.pricePosition ? `${stock.pricePosition.distanceToBaseAtr.toFixed(1)} ATR จากฐาน` : '—'}
+                      </span>
+                      {stock.pricePosition?.zone === 'NEAR_BASE' && (
+                        <span className={stock.pricePosition.entryReady ? 'text-emerald-300 font-bold' : 'text-rose-300'}>
+                          {!stock.pricePosition.supportHeld ? 'ราคาปิดหลุดฐาน' : stock.pricePosition.entryReady ? 'ฐานยังอยู่' : 'รอ CDC ยืนยัน'}
+                        </span>
+                      )}
+                    </div>}
 
                     {/* Sub info: Entry Timing Badge & Golden Cross Info */}
                     <div className="flex items-center justify-between text-[10px] text-slate-300 mt-2 pt-1 border-t border-slate-800/40">
                       <span className="font-semibold">{stock.entryTimingLabel}</span>
-                      {stock.barsSinceGoldenCross <= 1 && (stock.zone === 'BLUE' || stock.zone === 'GREEN') ? (
+                      {stock.barsSinceGoldenCross <= 2 && stock.zone === 'GREEN' ? (
                         <span className="text-emerald-300 font-extrabold flex items-center bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/40 shadow-sm animate-pulse">
-                          <Sparkles className="w-3 h-3 mr-0.5" /> จุดเข้าแรก!
+                          <Sparkles className="w-3 h-3 mr-0.5" /> เขียวซื้อสด!
                         </span>
                       ) : (
                         <span className="text-slate-500 font-mono">GC: {stock.barsSinceGoldenCross} แท่ง</span>
@@ -1200,6 +1319,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                   <th className="py-3 px-4">Watch</th>
                   <th className="py-3 px-4">ชื่อหุ้น</th>
                   <th className="py-3 px-4">ราคาล่าสุด</th>
+                  {showPricePosition && <th className="py-3 px-4">ตำแหน่งราคา 60D</th>}
                   <th className="py-3 px-4">24h Change</th>
                   <th className="py-3 px-4">CDC Action Zone</th>
                   <th className="py-3 px-4">CDC Quality Score</th>
@@ -1229,15 +1349,30 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
                         </button>
                       </td>
 
-                      {/* Symbol */}
+                      {/* Symbol & Technical Badges */}
                       <td className="py-3 px-4 font-black text-white text-sm">
-                        {stock.symbol}
+                        <div className="flex flex-col space-y-1">
+                          <span>{stock.symbol}</span>
+                          <TechnicalStatusBadges
+                            isBullish={stock.isBullish}
+                            isBreakout={stock.isBreakout}
+                            isDivergence={stock.isDivergence}
+                            size="sm"
+                          />
+                        </div>
                       </td>
 
                       {/* Price */}
                       <td className="py-3 px-4 text-white font-bold">
                         {formatStockPrice(stock.currentPrice)}
                       </td>
+
+                      {showPricePosition && <td className="py-3 px-4">
+                        <div className={stock.pricePosition?.zone === 'NEAR_BASE' ? 'text-emerald-300' : stock.pricePosition?.zone === 'EXTENDED' ? 'text-rose-300' : 'text-amber-200'}>
+                          <div className="font-semibold">{stock.pricePosition?.labelTh ?? 'ข้อมูลไม่พอ'}</div>
+                          <div className="text-[10px] text-slate-500">{stock.pricePosition ? `${stock.pricePosition.distanceToBaseAtr.toFixed(1)} ATR จากฐาน` : '—'}</div>
+                        </div>
+                      </td>}
 
                       {/* 24h Change */}
                       <td

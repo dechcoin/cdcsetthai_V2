@@ -1,5 +1,6 @@
 import React from 'react';
 import type { ScannerStockResult } from '../../types';
+import { TechnicalStatusBadges } from './TechnicalStatusBadges';
 import { Award, X, Zap } from 'lucide-react';
 
 interface StockQualityBreakdownModalProps {
@@ -72,6 +73,18 @@ export const StockQualityBreakdownModal: React.FC<StockQualityBreakdownModalProp
             />
           </div>
         </div>
+
+        {/* Technical Status Badges */}
+        {(stock.isBullish || stock.isBreakout || stock.isDivergence) && (
+          <div className="flex items-center justify-between bg-slate-950/60 p-3 rounded-xl border border-slate-800/70">
+            <span className="text-xs text-slate-400 font-bold">สถานะสัญญาณพิเศษ:</span>
+            <TechnicalStatusBadges
+              isBullish={stock.isBullish}
+              isBreakout={stock.isBreakout}
+              isDivergence={stock.isDivergence}
+            />
+          </div>
+        )}
 
         {/* 5 Factors Breakdown List */}
         <div className="space-y-3 text-xs">

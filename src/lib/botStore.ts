@@ -1,6 +1,5 @@
 import type { BotConfig, PaperAccount, ExecutedTrade, SettradeApiKeys, PaperPosition, Timeframe } from '../types';
 import { STORAGE_KEYS } from '../constants/storageKeys';
-import { encryptText, decryptText } from './encryption';
 import { POPULAR_STOCKS } from './stockApi';
 
 export const DEFAULT_BOT_CONFIG: BotConfig = {
@@ -16,16 +15,24 @@ export const DEFAULT_BOT_CONFIG: BotConfig = {
   maxOpenPositions: 5, // 🎯 ถือครองสูงสุด 5 ตัว (ไม้ละ 20% ของพอร์ตรวม)
   stopLossPercent: 5,
   takeProfitPercent: 15,
+  usePartialTakeProfit: true,
+  partialTakeProfitR: 1.5,
+  partialTakeProfitPercent: 50,
   useTrailingStop: false,
   trailingStopPercent: 3,
   useStopLossLock: true, // 🎯 ล็อกไม่ให้เข้าซื้อซ้ำในรอบเดิมเมื่อโดน Stop Loss
   stopLossLocks: {},
-  buyOnSignal: ['BLUE', 'GREEN'], // 🎯 สัญญาณฟ้าแรก หรือ เขียวแรกตามระบบ CDC Action Zone V3 ลุงโฉลก
+  buyOnSignal: ['GREEN'], // 🎯 ค่าเริ่มต้นเข้าซื้อเมื่อ CDC ยืนยันโซนเขียว
   sellOnSignal: ['RED'], // 🎯 ขายออกตามสัญญาณแดงแรก (Bearish Cash Out)
   mode: 'PAPER',
   scanMode: 'WATCHLIST', // 🎯 ค่าเริ่มต้น: เล่นเฉพาะหุ้นใน Watchlist ตามที่ตั้งไว้
   customWatchlist: ['PTT', 'CPALL', 'DELTA', 'KBANK', 'ADVANC', 'AOT'],
   directionMode: 'LONG_ONLY',
+  quantMinScore: 80,
+  useQuantFilter: true,
+  strictGoldenCrossOnly: true,
+  maxBarsSinceCrossover: 2,
+  skipExtendedPrice: true,
   isActive: false,
 };
 
@@ -37,6 +44,10 @@ export const DEFAULT_PAPER_ACCOUNT: PaperAccount = {
   winningTrades: 0,
   losingTrades: 0,
   totalProfitUsdt: 0,
+  peakEquityUsdt: 100000,
+  currentDrawdownPercent: 0,
+  consecutiveLosses: 0,
+  riskHalted: false,
 };
 
 // Store Helper Functions
@@ -46,6 +57,10 @@ export function getStoredBotConfig(): BotConfig {
     const raw = localStorage.getItem(STORAGE_KEYS.BOT_CONFIG);
     if (!raw) return DEFAULT_BOT_CONFIG;
     const parsed = JSON.parse(raw);
+    if (parsed.telegramConfig?.botToken) {
+      parsed.telegramConfig.botToken = '';
+      localStorage.setItem(STORAGE_KEYS.BOT_CONFIG, JSON.stringify(parsed));
+    }
 
     let cleanSymbol = parsed.symbol || 'PTT';
     if (
@@ -67,8 +82,11 @@ export function getStoredBotConfig(): BotConfig {
     return {
       ...DEFAULT_BOT_CONFIG,
       ...parsed,
+      telegramConfig: parsed.telegramConfig ? { ...parsed.telegramConfig, botToken: '' } : parsed.telegramConfig,
       symbol: cleanSymbol,
-      mode: parsed.mode === 'SETTRADE_LIVE' ? 'SETTRADE_LIVE' : 'PAPER',
+      // Live execution is deliberately disabled until a broker adapter exists.
+      mode: 'PAPER',
+      directionMode: 'LONG_ONLY',
       scanMode: parsed.scanMode || 'WATCHLIST',
       customWatchlist,
       timeframe: parsed.timeframe || '1d',
@@ -76,7 +94,12 @@ export function getStoredBotConfig(): BotConfig {
       useStopLossLock: parsed.useStopLossLock !== undefined ? parsed.useStopLossLock : true,
       stopLossLocks: parsed.stopLossLocks || {},
       positionSizingMode: parsed.positionSizingMode || 'EQUAL_WEIGHT',
-      buyOnSignal: parsed.buyOnSignal && parsed.buyOnSignal.length > 0 ? parsed.buyOnSignal : ['BLUE', 'GREEN'],
+      // Migrate the previous default (BLUE + GREEN) to the requested strict GREEN entry.
+      // Keep any other explicit user selection intact.
+      buyOnSignal: !parsed.buyOnSignal || parsed.buyOnSignal.length === 0
+        || (parsed.buyOnSignal.length === 2 && parsed.buyOnSignal.includes('BLUE') && parsed.buyOnSignal.includes('GREEN'))
+        ? ['GREEN']
+        : parsed.buyOnSignal,
       sellOnSignal: parsed.sellOnSignal && parsed.sellOnSignal.length > 0 ? parsed.sellOnSignal : ['RED'],
     };
   } catch {
@@ -85,7 +108,10 @@ export function getStoredBotConfig(): BotConfig {
 }
 
 export function saveBotConfig(config: BotConfig): void {
-  localStorage.setItem(STORAGE_KEYS.BOT_CONFIG, JSON.stringify(config));
+  const safeConfig = config.telegramConfig
+    ? { ...config, telegramConfig: { ...config.telegramConfig, botToken: '' } }
+    : config;
+  localStorage.setItem(STORAGE_KEYS.BOT_CONFIG, JSON.stringify(safeConfig));
 }
 
 export function getStoredPaperAccount(): PaperAccount {
@@ -128,28 +154,22 @@ export function addTradeToHistory(trade: ExecutedTrade): void {
 
 export function getStoredBrokerKeys(): SettradeApiKeys {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.SETTRADE_KEYS);
-    if (!raw) return { apiKey: '', apiSecret: '' };
-    const parsed = JSON.parse(raw);
-    return {
-      apiKey: decryptText(parsed.apiKey),
-      apiSecret: decryptText(parsed.apiSecret),
-      appCode: parsed.appCode ? decryptText(parsed.appCode) : '',
-      brokerId: parsed.brokerId ? decryptText(parsed.brokerId) : '',
-    };
+    // Broker credentials must never be persisted in browser storage. Remove
+    // legacy XOR-obfuscated values, which were reversible and not encryption.
+    localStorage.removeItem(STORAGE_KEYS.SETTRADE_KEYS);
   } catch {
-    return { apiKey: '', apiSecret: '' };
+    // Ignore unavailable storage.
   }
+  return { apiKey: '', apiSecret: '' };
 }
 
 export function saveBrokerKeys(keys: SettradeApiKeys): void {
-  const encryptedKeys = {
-    apiKey: encryptText(keys.apiKey),
-    apiSecret: encryptText(keys.apiSecret),
-    appCode: encryptText(keys.appCode),
-    brokerId: encryptText(keys.brokerId),
-  };
-  localStorage.setItem(STORAGE_KEYS.SETTRADE_KEYS, JSON.stringify(encryptedKeys));
+  void keys;
+  try {
+    localStorage.removeItem(STORAGE_KEYS.SETTRADE_KEYS);
+  } catch {
+    // Ignore unavailable storage.
+  }
 }
 
 export function getStoredTelegramConfig(): { botToken: string; chatId: string; isEnabled: boolean } {
@@ -157,8 +177,10 @@ export function getStoredTelegramConfig(): { botToken: string; chatId: string; i
     const raw = localStorage.getItem(STORAGE_KEYS.TELEGRAM_CONFIG);
     if (!raw) return { botToken: '', chatId: '', isEnabled: false };
     const parsed = JSON.parse(raw);
+    // Drop the legacy XOR token while retaining non-secret UI preferences.
+    localStorage.setItem(STORAGE_KEYS.TELEGRAM_CONFIG, JSON.stringify({ chatId: parsed.chatId || '', isEnabled: !!parsed.isEnabled }));
     return {
-      botToken: parsed.botToken ? decryptText(parsed.botToken) : '',
+      botToken: '',
       chatId: parsed.chatId || '',
       isEnabled: !!parsed.isEnabled,
     };
@@ -168,12 +190,12 @@ export function getStoredTelegramConfig(): { botToken: string; chatId: string; i
 }
 
 export function saveTelegramConfig(config: { botToken: string; chatId: string; isEnabled: boolean }): void {
-  const encrypted = {
-    botToken: encryptText(config.botToken),
+  const safeConfig = {
     chatId: config.chatId,
     isEnabled: config.isEnabled,
   };
-  localStorage.setItem(STORAGE_KEYS.TELEGRAM_CONFIG, JSON.stringify(encrypted));
+  void config.botToken;
+  localStorage.setItem(STORAGE_KEYS.TELEGRAM_CONFIG, JSON.stringify(safeConfig));
 }
 
 export function getStoredLogs(): string[] {

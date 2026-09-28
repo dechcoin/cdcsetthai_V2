@@ -239,16 +239,12 @@ export const SettradeSettingsModal: React.FC<SettradeSettingsModalProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => setTradingMode('SETTRADE_LIVE')}
-                    className={`p-3 rounded-xl border text-left transition flex flex-col justify-between space-y-1 ${
-                      tradingMode === 'SETTRADE_LIVE'
-                        ? 'bg-amber-500/15 border-amber-500/50 text-white font-bold'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                    }`}
+                    disabled
+                    className="p-3 rounded-xl border border-amber-500/30 text-left flex flex-col justify-between space-y-1 bg-amber-500/5 text-slate-400 opacity-80 cursor-not-allowed"
                   >
-                    <span className="text-amber-400 font-bold">⚡ Settrade Live / Sandbox</span>
+                    <span className="text-amber-300 font-bold">⚡ Settrade Live — ยังไม่พร้อมใช้งาน</span>
                     <span className="text-[10px] text-slate-400 font-normal">
-                      ส่งคำสั่งซื้อขายเข้าพอร์ต Settrade Open API (ตลาดหุ้นไทย SET)
+                      ยังไม่มี broker adapter; ระบบจะไม่ส่งคำสั่งจริง และไม่จำลอง Live order
                     </span>
                   </button>
                 </div>
@@ -343,7 +339,7 @@ export const SettradeSettingsModal: React.FC<SettradeSettingsModalProps> = ({
                 className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl font-semibold transition flex items-center justify-center space-x-2 disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isVerifying ? 'animate-spin' : ''}`} />
-                <span>ทดสอบการเชื่อมต่อ Direct InnovestX Open API</span>
+                    <span>ทดสอบสถานะ Broker API (ยังไม่รองรับการเชื่อมต่อจริง)</span>
               </button>
 
               {/* Verification Result Message */}
@@ -463,8 +459,8 @@ export const SettradeSettingsModal: React.FC<SettradeSettingsModalProps> = ({
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-start space-x-2 text-[10px] text-slate-400">
                 <Shield className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                 <span>
-                  เมื่อเซิร์ฟเวอร์ตั้งค่า <strong className="text-amber-300">DASHBOARD_TOKEN</strong> (Environment Variable) แล้ว
-                  ระบบจะบังคับให้ทุกคำขอ API ต้องส่งรหัสนี้มาด้วย เพื่อกันบุคคลภายนอกเข้าถึงบอท
+                  Production บังคับใช้ <strong className="text-amber-300">DASHBOARD_TOKEN</strong> ทุกคำขอ API; Local development เท่านั้นที่เว้นได้
+                  และต้องตั้ง <strong className="text-amber-300">LIVE_KEYS_ENCRYPTION_KEY</strong> บนเซิร์ฟเวอร์เพื่อเข้ารหัส Broker/Telegram secrets ก่อนบันทึก
                 </span>
               </div>
 
@@ -481,7 +477,7 @@ export const SettradeSettingsModal: React.FC<SettradeSettingsModalProps> = ({
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono focus:border-amber-500"
                 />
                 <p className="text-[10px] text-slate-500">
-                  รหัสจะถูกเก็บใน LocalStorage ของเบราว์เซอร์นี้เท่านั้น และถูกส่งไปกับทุกคำขอ /api/*
+                  รหัสอยู่ใน Session Storage ของแท็บนี้และถูกส่งไปกับทุกคำขอ /api/*; ปิดแท็บแล้วต้องกรอกใหม่
                 </p>
               </div>
             </div>

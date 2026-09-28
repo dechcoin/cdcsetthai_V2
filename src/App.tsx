@@ -19,6 +19,7 @@ import {
   resetBotServerPaperAccount,
   saveBrokerKeysToServer,
   unlockSymbolOnServer,
+  clearBotServerLogs,
 } from './lib/botApi';
 import { fetchStockTicker24h } from './lib/stockApi';
 import { calculateOrderSize } from './lib/positionSizing';
@@ -75,7 +76,9 @@ export default function App() {
     cpallPrice,
     currentPriceInfo,
     isLoadingCandles,
+    tickerStatus,
     loadCandles,
+    loadTickers,
   } = useMarketData({
     symbol: botConfig.symbol,
     chartTimeframe,
@@ -147,16 +150,26 @@ export default function App() {
           ? updated.customWatchlist
           : getStoredWatchlist(),
     };
+    const saved = await saveBotServerConfig(configWithWatchlist);
+    if (!saved) {
+      showToast('เซิร์ฟเวอร์ปฏิเสธการตั้งค่า หรือยังไม่ผ่านการยืนยันตัวตน', 'sell');
+      return false;
+    }
     setBotConfig(configWithWatchlist);
     saveBotConfig(configWithWatchlist);
-    await saveBotServerConfig(configWithWatchlist);
+    return true;
   };
 
   const handleSaveBrokerKeys = async (updatedKeys: SettradeApiKeys) => {
-    setBrokerKeys(updatedKeys);
-    saveBrokerKeys(updatedKeys);
-    await saveBrokerKeysToServer(updatedKeys);
-    showToast(`อัปเดต Settrade API Key เรียบร้อย`, 'info');
+    if (!updatedKeys.apiKey || !updatedKeys.apiSecret) return;
+    const saved = await saveBrokerKeysToServer(updatedKeys);
+    if (!saved) {
+      showToast('ยังบันทึก API Key ไม่ได้: ตรวจสอบ LIVE_KEYS_ENCRYPTION_KEY และการยืนยันตัวตน', 'sell');
+      return;
+    }
+    setBrokerKeys({ apiKey: '', apiSecret: '' });
+    saveBrokerKeys({ apiKey: '', apiSecret: '' });
+    showToast('บันทึก API Key แบบเข้ารหัสบนเซิร์ฟเวอร์แล้ว (Live trading ยังไม่รองรับ)', 'info');
   };
 
   // Update unified watchlist (from MarketScanner / BotControlPanel) and sync to bot config + cloud server
@@ -270,7 +283,7 @@ export default function App() {
       {/* Toast Notification Popup */}
       {toastMessage && (
         <div
-          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-2xl shadow-2xl border flex items-center space-x-2 text-xs font-bold transition-all animate-bounce ${
+          className={`fixed bottom-3 left-3 right-3 sm:bottom-6 sm:left-auto sm:right-6 z-50 max-w-[calc(100vw-1.5rem)] px-4 py-3 rounded-2xl shadow-2xl border flex items-center justify-center sm:justify-start space-x-2 text-center sm:text-left text-xs font-bold transition-all animate-bounce ${
             toastMessage.type === 'buy'
               ? 'bg-emerald-600 text-white border-emerald-400'
               : toastMessage.type === 'sell'
@@ -290,14 +303,16 @@ export default function App() {
         paperAccount={paperAccount}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onResetPaperAccount={handleResetPaperAccount}
-        onToggleBot={() => {
+        onToggleBot={async () => {
           const nextState = !botConfig.isActive;
-          handleSaveBotConfig({ ...botConfig, isActive: nextState });
-          showToast(nextState ? 'เปิดระบบอัตโนมัติ CDC Stock Bot แล้ว' : 'หยุดระบบอัตโนมัติ CDC Stock Bot แล้ว', 'info');
+          const saved = await handleSaveBotConfig({ ...botConfig, isActive: nextState });
+          if (saved) showToast(nextState ? 'เปิดระบบ Paper Trading อัตโนมัติแล้ว' : 'หยุดระบบอัตโนมัติ CDC Stock Bot แล้ว', 'info');
         }}
         pttPrice={pttPrice}
         cpallPrice={cpallPrice}
         tickers={allTickers}
+        tickerStatus={tickerStatus}
+        onRetryTickers={loadTickers}
         onSelectSymbol={(selectedSymbol) => {
           handleSaveBotConfig({ ...botConfig, symbol: selectedSymbol });
           setActiveTab('chart');
@@ -306,7 +321,7 @@ export default function App() {
       />
 
       {/* Main Content Body */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 space-y-6">
+      <main className="max-w-7xl mx-auto min-w-0 px-3 sm:px-6 lg:px-8 pt-3 sm:pt-6 space-y-4 sm:space-y-6">
         {activeTab === 'chart' && (
           <div className="space-y-6">
             <CDCChart
@@ -343,10 +358,16 @@ export default function App() {
                 showToast(`ปลดล็อกหุ้น ${symToUnlock} เรียบร้อยแล้ว`, 'info');
               }}
               botLogs={botLogs}
-              onClearLogs={() => {
+              onClearLogs={async () => {
                 localStorage.removeItem(STORAGE_KEYS.BOT_LOGS);
                 localStorage.removeItem(LEGACY_STORAGE_KEYS.BOT_LOGS);
                 setBotLogs([]);
+                try {
+                  await clearBotServerLogs();
+                  showToast('ล้างบันทึก Bot Activity Console เรียบร้อยแล้ว', 'info');
+                } catch (e) {
+                  console.error('Failed to clear bot logs on server:', e);
+                }
               }}
             />
           </div>

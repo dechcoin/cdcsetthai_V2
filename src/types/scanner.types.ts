@@ -1,4 +1,5 @@
 import type { CDCZoneColor, CDCSignalType, Timeframe } from './market.types';
+import type { PricePositionAssessment } from '../lib/quantEngine';
 
 /**
  * Market-scanner domain types: per-symbol scan results plus the CDC quality
@@ -47,4 +48,14 @@ export interface ScannerStockResult {
   qualityScore: number;
   qualityGrade: 'S' | 'A' | 'B' | 'C' | 'D';
   qualityBreakdown: QualityScoreBreakdown;
+  pricePosition: PricePositionAssessment | null;
+  isBullish?: boolean;
+  isBreakout?: boolean;
+  isDivergence?: boolean;
+}
+
+export interface TechnicalStatus {
+  isBullish: boolean;
+  isBreakout: boolean;
+  isDivergence: boolean;
 }

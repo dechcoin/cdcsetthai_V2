@@ -1,8 +1,15 @@
 import type { ExecutedTrade, PaperPosition } from '../../src/types';
-import { calculateCDCActionZone, isLongEntrySignal, isShortEntrySignal } from '../../src/lib/cdcIndicator';
+import { calculateCDCActionZone, getCrossoverInfo, isLongEntrySignal, isShortEntrySignal } from '../../src/lib/cdcIndicator';
 import { ALL_MARKET_STOCKS, calculateBoardLotShares } from '../../src/lib/stockApi';
 import { calculateOrderSize } from '../../src/lib/positionSizing';
+import { assessBuySetup, assessDailyPricePosition } from '../../src/lib/quantEngine';
 import { calculateSpotPnl } from '../../src/lib/pnl';
+import {
+  calculatePartialTakeProfitPrice,
+  calculatePartialTakeProfitShares,
+  registerCompletedPaperTrade,
+  updatePaperAccountRisk,
+} from '../../src/lib/riskManagement';
 import { addServerLog, getServerState, saveServerState } from '../repositories/stateRepository';
 import { fetchKlinesCached, isThaiMarketOpen, stripFormingCandle } from './marketData';
 import { sendTelegramAlert } from './telegram.service';
@@ -26,6 +33,12 @@ export async function runServerBotCycle() {
   const state = getServerState();
   const config = state.botConfig;
   if (!config.isActive) return;
+  if (config.mode !== 'PAPER') {
+    config.isActive = false;
+    saveServerState();
+    addServerLog('⛔ [LIVE DISABLED] ไม่มี broker execution adapter — ปิดบอทเพื่อป้องกันการจำลองคำสั่งในโหมด Live');
+    return;
+  }
 
   // ห้ามส่งคำสั่งซื้อขายนอกเวลาทำการของตลาดหลักทรัพย์ (SET)
   if (!isThaiMarketOpen()) return;
@@ -50,17 +63,17 @@ export async function runServerBotCycle() {
     for (const sym of symbolsToEvaluate) {
       if (!state.botConfig.isActive) break;
 
-      const rawCandles = await fetchKlinesCached(sym, config.timeframe, 300);
+      const rawCandles = await fetchKlinesCached(sym, config.timeframe, 750);
       if (rawCandles.length < 30) continue;
 
-      // 🎯 กราฟ 1D/1W: ตัดสินใจบนแท่งเทียนที่ "ปิดสมบูรณ์แล้ว" เท่านั้น
-      // เพื่อไม่ให้สัญญาณ เขียว/แดง กลับตัวกลางวัน (แท่งล่าสุดยังฟอร์มไม่จบ)
+      // ตัดแท่งที่ยังฟอร์มไม่จบทุก timeframe ก่อนประเมินสัญญาณ CDC
       const signalCandles = stripFormingCandle(rawCandles, config.timeframe);
       const cdcCandles = calculateCDCActionZone(signalCandles, config.fastEmaPeriod, config.slowEmaPeriod);
       if (cdcCandles.length < 2) continue;
 
       const latestCandle = cdcCandles[cdcCandles.length - 1];
       const currentPrice = rawCandles[rawCandles.length - 1].close;
+      const quant = assessBuySetup(signalCandles);
 
       // 1. Check Exits on Active Positions for this symbol
       const existingPosIndex = state.paperAccount.activePositions.findIndex((p) => p.symbol === sym);
@@ -74,7 +87,62 @@ export async function runServerBotCycle() {
         );
 
         if (config.useTrailingStop && config.trailingStopPercent > 0) {
-          pos.trailingStopPrice = pos.highestPriceSinceEntry * (1 - config.trailingStopPercent / 100);
+          const nextTrailingStop = pos.highestPriceSinceEntry * (1 - config.trailingStopPercent / 100);
+          pos.trailingStopPrice = Math.max(pos.trailingStopPrice || 0, nextTrailingStop, pos.stopLossPrice || 0);
+        }
+
+        // Realize a portion at 1.5R by default; retain the rest and move its
+        // protective stop to breakeven. SET fractional exits stay in board lots.
+        const partialRisk = pos.initialRiskPerShare
+          ?? (config.stopLossPercent > 0 ? pos.entryPrice * config.stopLossPercent / 100 : 0);
+        const partialR = Math.max(0.1, config.partialTakeProfitR ?? 1.5);
+        const partialPercent = Math.max(1, Math.min(99, config.partialTakeProfitPercent ?? 50));
+        const partialTargetPrice = calculatePartialTakeProfitPrice(pos.entryPrice, partialRisk, partialR);
+        if (
+          pos.side === 'LONG'
+          && config.usePartialTakeProfit !== false
+          && !pos.partialTakeProfitTaken
+          && partialRisk > 0
+          && partialTargetPrice > 0
+          && currentPrice >= partialTargetPrice
+        ) {
+          const sharesToSell = calculatePartialTakeProfitShares(pos.amount, partialPercent);
+          pos.partialTakeProfitTaken = true;
+          if (sharesToSell >= 100 && sharesToSell < pos.amount) {
+            const oldAmount = pos.amount;
+            const soldCostBasis = pos.usdtInvested * sharesToSell / oldAmount;
+            const partialPnl = (currentPrice - pos.entryPrice) * sharesToSell;
+            const proceeds = currentPrice * sharesToSell;
+            state.paperAccount.usdtBalance += proceeds;
+            pos.amount -= sharesToSell;
+            pos.usdtInvested = Math.max(0, pos.usdtInvested - soldCostBasis);
+            pos.realizedPnlUsdt = (pos.realizedPnlUsdt || 0) + partialPnl;
+            pos.stopLossPrice = Math.max(pos.stopLossPrice || 0, pos.entryPrice);
+            pos.trailingStopPrice = Math.max(pos.trailingStopPrice || 0, pos.entryPrice);
+
+            state.tradeHistory.unshift({
+              id: `trade_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              symbol: pos.symbol,
+              timeframe: config.timeframe,
+              side: 'CLOSE_LONG',
+              price: currentPrice,
+              amount: sharesToSell,
+              usdtValue: proceeds,
+              pnlUsdt: Number(partialPnl.toFixed(2)),
+              pnlPercent: Number((partialPnl / Math.max(soldCostBasis, 1) * 100).toFixed(2)),
+              reason: `[Partial TP] ขาย ${partialPercent}% ที่ ${partialR}R; เลื่อน Stop ส่วนที่เหลือเป็นทุน`,
+              timestamp: Date.now(),
+              mode: 'PAPER',
+            });
+            addServerLog(`🎯 [PARTIAL TP] ${sym} ขาย ${sharesToSell.toLocaleString()} หุ้น @ ฿${currentPrice.toFixed(2)} | กำไรที่รับรู้ ฿${partialPnl.toFixed(2)} | Stop ส่วนที่เหลือเลื่อนมาที่ทุน`);
+            sendTelegramAlert(
+              `🎯 <b>[CDC Stock Bot] Partial Take Profit</b>\n\n` +
+              `📈 <b>หุ้น:</b> <code>${sym}</code>\n` +
+              `📊 <b>ขาย:</b> ${sharesToSell.toLocaleString()} หุ้น @ ฿${currentPrice.toFixed(2)}\n` +
+              `💰 <b>กำไรที่รับรู้:</b> ฿${partialPnl.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n` +
+              `🛡️ <b>Stop หุ้นที่เหลือ:</b> เลื่อนมาที่ราคาเข้า ฿${pos.entryPrice.toFixed(2)}`
+            );
+          }
         }
 
         const { pnlPercent, pnlThb: pnlUsdt } = calculateSpotPnl(
@@ -85,11 +153,15 @@ export async function runServerBotCycle() {
         );
 
         let exitReason = '';
-        if (config.stopLossPercent > 0 && pnlPercent <= -config.stopLossPercent) {
-          exitReason = `Stop Loss (-${config.stopLossPercent}%)`;
+        const baseStop = pos.stopLossPrice
+          ?? (config.stopLossPercent > 0 ? pos.entryPrice * (1 - config.stopLossPercent / 100) : undefined);
+        if (pos.side === 'LONG' && baseStop !== undefined && currentPrice <= baseStop) {
+          exitReason = baseStop >= pos.entryPrice
+            ? `Break-even Stop @ ฿${baseStop.toFixed(2)}`
+            : `Stop Loss (-${config.stopLossPercent}%)`;
 
           // Stop Loss Lock & Whipsaw Protection
-          if (config.useStopLossLock !== false) {
+          if (config.useStopLossLock !== false && baseStop < pos.entryPrice) {
             if (!state.botConfig.stopLossLocks) state.botConfig.stopLossLocks = {};
             state.botConfig.stopLossLocks[pos.symbol] = {
               symbol: pos.symbol,
@@ -103,6 +175,7 @@ export async function runServerBotCycle() {
         } else if (
           config.useTrailingStop &&
           config.trailingStopPercent > 0 &&
+          pos.side === 'LONG' &&
           pos.highestPriceSinceEntry &&
           pos.highestPriceSinceEntry > pos.entryPrice * (1 + (config.trailingStopPercent * 0.5) / 100) &&
           pos.trailingStopPrice &&
@@ -123,15 +196,10 @@ export async function runServerBotCycle() {
 
         if (exitReason) {
           const returnUsdt = Math.max(0, pos.usdtInvested + pnlUsdt);
+          const fullTradePnl = (pos.realizedPnlUsdt || 0) + pnlUsdt;
           state.paperAccount.usdtBalance += returnUsdt;
           state.paperAccount.activePositions.splice(existingPosIndex, 1);
-          state.paperAccount.totalTrades += 1;
-          if (pnlUsdt > 0) {
-            state.paperAccount.winningTrades += 1;
-          } else {
-            state.paperAccount.losingTrades += 1;
-          }
-          state.paperAccount.totalProfitUsdt += pnlUsdt;
+          registerCompletedPaperTrade(state.paperAccount, fullTradePnl);
 
           const trade: ExecutedTrade = {
             id: `trade_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -142,7 +210,7 @@ export async function runServerBotCycle() {
             amount: pos.amount,
             usdtValue: returnUsdt,
             pnlUsdt: Number(pnlUsdt.toFixed(2)),
-            pnlPercent: Number(pnlPercent.toFixed(2)),
+            pnlPercent: Number((fullTradePnl / Math.max(pos.initialInvestedUsdt || pos.usdtInvested, 1) * 100).toFixed(2)),
             reason: `[Auto 100%] ${exitReason}`,
             timestamp: Date.now(),
             mode: config.mode,
@@ -154,30 +222,32 @@ export async function runServerBotCycle() {
           }
 
           addServerLog(
-            `🛑 [AUTO CLOSE ${pos.side}] ${pos.symbol} @ ฿${currentPrice} | PnL: ${pnlUsdt >= 0 ? '+' : ''}฿${pnlUsdt.toFixed(2)} (${pnlPercent.toFixed(2)}%) | เหตุผล: ${exitReason}`
+            `🛑 [AUTO CLOSE ${pos.side}] ${pos.symbol} @ ฿${currentPrice} | PnL รวมไม้: ${fullTradePnl >= 0 ? '+' : ''}฿${fullTradePnl.toFixed(2)} | เหตุผล: ${exitReason}`
           );
           saveServerState();
 
-          const isWin = pnlUsdt >= 0;
+          const isWin = fullTradePnl > 0;
           sendTelegramAlert(
             `${isWin ? '🎯' : '🛑'} <b>[CDC Stock Bot] ปิดสถานะหุ้น (${pos.side})</b>\n\n` +
             `📈 <b>หุ้น:</b> <code>${pos.symbol}</code>\n` +
             `💰 <b>ราคาปิด:</b> ฿${currentPrice.toFixed(2)}\n` +
             `📊 <b>จำนวน:</b> ${pos.amount.toLocaleString()} หุ้น (${(pos.amount / 100).toLocaleString()} Lots)\n` +
-            `💵 <b>ผลตอบแทน:</b> ${isWin ? '+' : ''}฿${pnlUsdt.toLocaleString('en-US', { minimumFractionDigits: 2 })} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)\n` +
+            `💵 <b>ผลตอบแทนรวมทั้งไม้:</b> ${isWin ? '+' : ''}฿${fullTradePnl.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n` +
             `📝 <b>เหตุผล:</b> ${exitReason}\n` +
             `⏱️ <b>ไทม์เฟรม:</b> ${config.timeframe}\n` +
-            `💼 <b>โหมด:</b> ${config.mode === 'SETTRADE_LIVE' ? '⚡ InnovestX Live' : '🟢 Paper Trading'}\n` +
+            `💼 <b>โหมด:</b> 🟢 Paper Trading\n` +
             `📅 <b>เวลา:</b> ${new Date().toLocaleTimeString('th-TH')}`
           );
         } else {
           pos.currentPnlUsdt = Number(pnlUsdt.toFixed(2));
           pos.currentPnlPercent = Number(pnlPercent.toFixed(2));
+          updatePaperAccountRisk(state.paperAccount);
         }
         continue;
       }
 
       // 2. Check Entries for this symbol
+      if (!quant) continue;
       const maxPositions = Math.max(1, Math.min(20, config.maxOpenPositions || 5));
       if (state.paperAccount.activePositions.length >= maxPositions) {
         break; // Max concurrent slots reached
@@ -195,8 +265,34 @@ export async function runServerBotCycle() {
         }
       }
 
-      const isBuySignal = isLongEntrySignal(cdcCandles, config.buyOnSignal);
+      // 1. Strict Golden Cross Guard: only buy within first N bars of Golden Cross
+      const crossover = getCrossoverInfo(cdcCandles);
+      const isFreshGoldenCross = crossover.barsSinceGoldenCross <= (config.maxBarsSinceCrossover ?? 2);
+      if (config.strictGoldenCrossOnly !== false && (dirMode === 'LONG_ONLY' || dirMode === 'BOTH') && !isFreshGoldenCross) {
+        continue;
+      }
+
+      // 2. Anti-Extended Price Guard: block buying if price is already stretched far from 60D base
+      if (config.skipExtendedPrice !== false && (dirMode === 'LONG_ONLY' || dirMode === 'BOTH')) {
+        const pricePos = assessDailyPricePosition(signalCandles);
+        if (pricePos && pricePos.zone === 'EXTENDED') {
+          addServerLog(`⚠️ [EXTENDED GUARD] ${sym} ราคายืดตัว (${pricePos.distanceToBaseAtr.toFixed(1)} ATR จากฐาน) — งดเข้าซื้อเพื่อป้องกันการไล่ราคาติดดอย`);
+          continue;
+        }
+      }
+
+      const isBuySignal = isLongEntrySignal(cdcCandles, config.buyOnSignal, {
+        strictGoldenCross: config.strictGoldenCrossOnly !== false,
+        maxBarsSinceCrossover: config.maxBarsSinceCrossover ?? 2,
+      });
       const isSellSignal = isShortEntrySignal(cdcCandles, config.sellOnSignal);
+
+      // Quant guard: only admit fresh CDC signals with sufficient quality score
+      const minScore = config.quantMinScore ?? 80;
+      if (config.useQuantFilter !== false && (isBuySignal || dirMode === 'LONG_ONLY') && quant.effectiveScore < minScore) {
+        addServerLog(`⏭️ [MIN SCORE GATE] ${sym} score ${quant.effectiveScore.toFixed(1)} < ${minScore} (${quant.reasons.join(', ')})`);
+        continue;
+      }
 
       let targetSide: 'LONG' | 'SHORT' | null = null;
       if ((dirMode === 'LONG_ONLY' || dirMode === 'BOTH') && isBuySignal) {
@@ -206,7 +302,14 @@ export async function runServerBotCycle() {
       }
 
       if (targetSide) {
-        const rawBudget = calculateOrderSize(config, state.paperAccount);
+        const riskStatus = updatePaperAccountRisk(state.paperAccount);
+        if (!riskStatus.canOpenPosition) {
+          addServerLog(riskStatus.halted
+            ? `⛔ [RISK HALT] Drawdown ${riskStatus.drawdownPercent.toFixed(2)}% ถึงขีดจำกัด 15% — งดเปิดไม้ใหม่`
+            : `⏸️ [LOSS COOLDOWN] งดเปิดไม้ใหม่จนถึง ${new Date(riskStatus.cooldownUntil || 0).toLocaleString('th-TH')}`);
+          continue;
+        }
+        const rawBudget = calculateOrderSize(config, state.paperAccount) * riskStatus.sizeMultiplier;
 
         // SET Board Lot (100 shares) Validation — spot: เงินสดเต็มจำนวน ไม่มีเลเวอเรจ
         const lotInfo = calculateBoardLotShares(rawBudget, currentPrice);
@@ -228,11 +331,17 @@ export async function runServerBotCycle() {
             amount: sharesAmount,
             usdtInvested: actualTradeUsdt,
             entryTime: Date.now(),
+            initialInvestedUsdt: actualTradeUsdt,
+            initialRiskPerShare: config.stopLossPercent > 0 ? currentPrice * config.stopLossPercent / 100 : undefined,
+            stopLossPrice: config.stopLossPercent > 0 ? currentPrice * (1 - config.stopLossPercent / 100) : undefined,
+            partialTakeProfitTaken: false,
+            realizedPnlUsdt: 0,
             currentPnlUsdt: 0,
             currentPnlPercent: 0,
           };
 
           state.paperAccount.activePositions.push(newPos);
+          updatePaperAccountRisk(state.paperAccount);
 
           const trade: ExecutedTrade = {
             id: `trade_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -261,7 +370,7 @@ export async function runServerBotCycle() {
             `💵 <b>เงินลงทุน:</b> ฿${actualTradeUsdt.toLocaleString('en-US', { minimumFractionDigits: 2 })} THB\n` +
             `🎯 <b>สัญญาณ:</b> ${latestCandle.colorNameTh} (CDC Action Zone)\n` +
             `⏱️ <b>ไทม์เฟรม:</b> ${config.timeframe}\n` +
-            `💼 <b>โหมด:</b> ${config.mode === 'SETTRADE_LIVE' ? '⚡ InnovestX Live' : '🟢 Paper Trading'}\n` +
+            `💼 <b>โหมด:</b> 🟢 Paper Trading\n` +
             `📅 <b>เวลา:</b> ${new Date().toLocaleTimeString('th-TH')}`
           );
         }
@@ -270,6 +379,7 @@ export async function runServerBotCycle() {
   } catch (err) {
     console.error('Error in server bot cycle:', err);
   } finally {
+    saveServerState();
     isCycleRunning = false;
   }
 }

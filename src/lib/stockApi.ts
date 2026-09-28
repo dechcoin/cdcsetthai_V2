@@ -23,7 +23,7 @@ export function toFriendlySymbol(symbol: string): string {
 export async function fetchStockKlines(
   symbol = 'PTT',
   interval: Timeframe = '1d',
-  limit = 300
+  limit = 750
 ): Promise<KlineData[]> {
   const friendlySymbol = toStockSymbol(symbol);
 
@@ -42,6 +42,14 @@ export async function fetchStockKlines(
     case '15m':
       resolution = '15';
       timeStepSeconds = 900;
+      break;
+    case '30m':
+      resolution = '30';
+      timeStepSeconds = 1800;
+      break;
+    case '45m':
+      resolution = '45';
+      timeStepSeconds = 2700;
       break;
     case '1h':
       resolution = '60';
@@ -65,7 +73,9 @@ export async function fetchStockKlines(
   }
 
   const to = Math.floor(Date.now() / 1000);
-  const from = to - limit * timeStepSeconds;
+  // Compensate for market closures on weekends & holidays (~245 trading days/year)
+  const calendarFactor = (interval === '1d' || interval === '1w') ? 1.5 : 1;
+  const from = to - Math.floor(limit * timeStepSeconds * calendarFactor);
 
   try {
     const response = await apiFetch(
@@ -297,7 +307,8 @@ export function formatStockPriceByTickSize(price: number, tickSize?: number): nu
 }
 
 /**
- * Sends a signed Live Order to Settrade Open API / Thai Broker
+ * Calls the broker-order proxy. The current server intentionally responds 501
+ * until a real Settrade adapter is implemented; this does not place an order.
  */
 export async function executeLiveStockOrder(params: {
   apiKey: string;
@@ -326,7 +337,8 @@ export async function executeLiveStockOrder(params: {
 }
 
 /**
- * Fetches real account THB balance from Settrade / Broker signed endpoint
+ * Calls the broker-balance proxy. The current server intentionally responds 501
+ * until a real Settrade adapter is implemented; this does not fetch live funds.
  */
 export async function fetchLiveStockBalances(keys: {
   apiKey: string;

@@ -25,14 +25,14 @@ export const ScannerSummaryBanner: React.FC<ScannerSummaryBannerProps> = ({ metr
 
       <div className="space-y-0.5">
         <span className="text-[10px] text-emerald-400 font-semibold uppercase tracking-wider flex items-center">
-          <Sparkles className="w-3 h-3 mr-1 text-emerald-300" /> จุดเข้าที่ดีที่สุด (0-1 แท่ง)
+          <Sparkles className="w-3 h-3 mr-1 text-emerald-300" /> เขียวซื้อ + Golden Cross สด (≤2 แท่ง)
         </span>
         <div className="flex items-baseline space-x-1">
           <span className="text-xl font-black text-emerald-400 font-mono">
             {metrics.primeEntries}
           </span>
           <span className="text-[11px] text-emerald-500/70">
-            (ซื้อทั้งหมด {metrics.buySignals})
+          (โซนเขียว {metrics.buySignals})
           </span>
         </div>
       </div>

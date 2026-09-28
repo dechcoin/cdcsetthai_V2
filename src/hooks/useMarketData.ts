@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { KlineData, StockTicker24h, Timeframe } from '../types';
 import { calculateCDCActionZone } from '../lib/cdcIndicator';
 import { fetchStockKlines, fetchStockTicker24h, POPULAR_STOCKS } from '../lib/stockApi';
@@ -47,6 +47,8 @@ export interface UseMarketDataResult {
   /** Latest close of `symbol`, used as the live price for manual orders. */
   currentPriceInfo: { symbol: string; price: number };
   isLoadingCandles: boolean;
+  /** Ticker-tape fetch state so the header can show an error instead of loading forever. */
+  tickerStatus: 'loading' | 'ready' | 'error';
   /** Manual refresh (e.g. the CDCChart refresh button). */
   loadCandles: () => Promise<void>;
   /** Manual ticker refresh (the polling loop calls this automatically). */
@@ -54,7 +56,7 @@ export interface UseMarketDataResult {
 }
 
 const DEFAULT_CANDLE_POLL_MS = 10000;
-const DEFAULT_TICKER_POLL_MS = 8000;
+const DEFAULT_TICKER_POLL_MS = 20000;
 const DEFAULT_TICKER_LIMIT = 30;
 
 export function useMarketData({
@@ -67,25 +69,40 @@ export function useMarketData({
   tickerPollMs = DEFAULT_TICKER_POLL_MS,
   tickerLimit = DEFAULT_TICKER_LIMIT,
 }: UseMarketDataParams): UseMarketDataResult {
-  const [candles, setCandles] = useState<KlineData[]>([]);
+  const chartIdentity = `${symbol}|${chartTimeframe}`;
+  const requestIdentity = `${chartIdentity}|${botTimeframe}|${fastEmaPeriod}|${slowEmaPeriod}`;
+  const [candleState, setCandleState] = useState<{ identity: string; data: KlineData[] }>({
+    identity: chartIdentity,
+    data: [],
+  });
+  const candles = candleState.identity === chartIdentity ? candleState.data : [];
   const [botCandles, setBotCandles] = useState<KlineData[]>([]);
   const [isLoadingCandles, setIsLoadingCandles] = useState(false);
   const [pttPrice, setPttPrice] = useState<number | undefined>(undefined);
   const [cpallPrice, setCpallPrice] = useState<number | undefined>(undefined);
   const [allTickers, setAllTickers] = useState<StockTicker24h[]>([]);
+  const [tickerStatus, setTickerStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [currentPriceInfo, setCurrentPriceInfo] = useState<{ symbol: string; price: number }>({
     symbol: 'PTT',
     price: 0,
   });
+  const activeRequestIdentityRef = useRef(requestIdentity);
+  const candleRequestIdRef = useRef(0);
+  activeRequestIdentityRef.current = requestIdentity;
 
   // 1. Fetch Market Candlestick Data (Separating Chart View from Bot Engine)
   const loadCandles = useCallback(async () => {
+    if (activeRequestIdentityRef.current !== requestIdentity) return;
+
+    const requestId = ++candleRequestIdRef.current;
     setIsLoadingCandles(true);
     try {
       // A. Load Chart Viewing Candles (on chartTimeframe)
-      const chartRaw = await fetchStockKlines(symbol, chartTimeframe, 300);
+      const chartRaw = await fetchStockKlines(symbol, chartTimeframe, 750);
+      if (requestId !== candleRequestIdRef.current || activeRequestIdentityRef.current !== requestIdentity) return;
+
       const chartCdc = calculateCDCActionZone(chartRaw, fastEmaPeriod, slowEmaPeriod);
-      setCandles(chartCdc);
+      setCandleState({ identity: chartIdentity, data: chartCdc });
       if (chartCdc.length > 0) {
         const latest = chartCdc[chartCdc.length - 1];
         setCurrentPriceInfo({ symbol, price: latest.close });
@@ -95,16 +112,22 @@ export function useMarketData({
       if (chartTimeframe === botTimeframe) {
         setBotCandles(chartCdc);
       } else {
-        const botRaw = await fetchStockKlines(symbol, botTimeframe, 300);
+        const botRaw = await fetchStockKlines(symbol, botTimeframe, 750);
+        if (requestId !== candleRequestIdRef.current || activeRequestIdentityRef.current !== requestIdentity) return;
+
         const botCdc = calculateCDCActionZone(botRaw, fastEmaPeriod, slowEmaPeriod);
         setBotCandles(botCdc);
       }
     } catch (err) {
-      console.error('Error loading klines:', err);
+      if (requestId === candleRequestIdRef.current && activeRequestIdentityRef.current === requestIdentity) {
+        console.error('Error loading klines:', err);
+      }
     } finally {
-      setIsLoadingCandles(false);
+      if (requestId === candleRequestIdRef.current && activeRequestIdentityRef.current === requestIdentity) {
+        setIsLoadingCandles(false);
+      }
     }
-  }, [symbol, botTimeframe, chartTimeframe, fastEmaPeriod, slowEmaPeriod]);
+  }, [symbol, botTimeframe, chartTimeframe, fastEmaPeriod, slowEmaPeriod, chartIdentity, requestIdentity]);
 
   // 2. Fetch All Stock Prices for Header Running Ticker Tape
   const loadTickers = useCallback(async () => {
@@ -125,14 +148,18 @@ export function useMarketData({
           .slice(0, tickerLimit);
 
         setAllTickers(filtered);
+        setTickerStatus('ready');
 
         const ptt = raw.find((t) => t.symbol === 'PTT');
         const cpall = raw.find((t) => t.symbol === 'CPALL');
         if (ptt) setPttPrice(ptt.lastPrice);
         if (cpall) setCpallPrice(cpall.lastPrice);
+      } else {
+        setTickerStatus('error');
       }
     } catch (err) {
       console.warn('Ticker update failed:', err);
+      setTickerStatus('error');
     }
   }, [tickerLimit]);
 
@@ -159,6 +186,7 @@ export function useMarketData({
     cpallPrice,
     currentPriceInfo,
     isLoadingCandles,
+    tickerStatus,
     loadCandles,
     loadTickers,
   };

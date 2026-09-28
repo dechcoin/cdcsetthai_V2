@@ -8,7 +8,9 @@ import { STORAGE_KEYS } from '../constants/storageKeys';
 
 export function getDashboardToken(): string {
   try {
-    return localStorage.getItem(STORAGE_KEYS.DASHBOARD_TOKEN) || '';
+    // Clear older persistent copies; retain the token only for this tab session.
+    localStorage.removeItem(STORAGE_KEYS.DASHBOARD_TOKEN);
+    return sessionStorage.getItem(STORAGE_KEYS.DASHBOARD_TOKEN) || '';
   } catch {
     return '';
   }
@@ -17,9 +19,9 @@ export function getDashboardToken(): string {
 export function setDashboardToken(token: string): void {
   try {
     if (token) {
-      localStorage.setItem(STORAGE_KEYS.DASHBOARD_TOKEN, token);
+      sessionStorage.setItem(STORAGE_KEYS.DASHBOARD_TOKEN, token);
     } else {
-      localStorage.removeItem(STORAGE_KEYS.DASHBOARD_TOKEN);
+      sessionStorage.removeItem(STORAGE_KEYS.DASHBOARD_TOKEN);
     }
   } catch {
     /* ignore storage errors */

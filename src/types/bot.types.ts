@@ -26,6 +26,9 @@ export interface BotConfig {
   maxOpenPositions?: number;
   stopLossPercent: number; // 0 = disabled
   takeProfitPercent: number; // 0 = disabled
+  usePartialTakeProfit?: boolean;
+  partialTakeProfitR?: number;
+  partialTakeProfitPercent?: number;
   useTrailingStop: boolean;
   trailingStopPercent: number;
   useStopLossLock?: boolean; // Lock coin if hit SL in current trend cycle
@@ -37,6 +40,11 @@ export interface BotConfig {
   scanMode?: 'SINGLE' | 'WATCHLIST' | 'MULTI_SCAN';
   customWatchlist?: string[];
   directionMode?: 'LONG_ONLY' | 'SHORT_ONLY' | 'BOTH';
+  quantMinScore?: number;
+  useQuantFilter?: boolean;
+  strictGoldenCrossOnly?: boolean;
+  maxBarsSinceCrossover?: number;
+  skipExtendedPrice?: boolean;
   telegramConfig?: {
     botToken: string;
     chatId: string;
@@ -59,11 +67,15 @@ export interface PaperPosition {
   entryPrice: number;
   amount: number; // Number of shares (หุ้น)
   usdtInvested: number; // Invested Capital in THB (฿) = ต้นทุน spot เต็มจำนวน
+  initialInvestedUsdt?: number;
   entryTime: number;
   stopLossPrice?: number;
   takeProfitPrice?: number;
   highestPriceSinceEntry?: number; // Highest price reached for Trailing Stop
   trailingStopPrice?: number; // Dynamic trailing stop price
+  initialRiskPerShare?: number;
+  partialTakeProfitTaken?: boolean;
+  realizedPnlUsdt?: number;
   currentPnlUsdt: number; // Current PnL in THB (฿)
   currentPnlPercent: number;
 }
@@ -76,6 +88,11 @@ export interface PaperAccount {
   winningTrades: number;
   losingTrades: number;
   totalProfitUsdt: number; // Total realized profit in THB (฿)
+  peakEquityUsdt?: number;
+  currentDrawdownPercent?: number;
+  consecutiveLosses?: number;
+  cooldownUntil?: number;
+  riskHalted?: boolean;
 }
 
 export interface ExecutedTrade {

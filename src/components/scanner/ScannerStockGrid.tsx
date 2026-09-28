@@ -3,6 +3,7 @@ import type { ScannerStockResult, Timeframe } from '../../types';
 import { formatStockPrice } from '../../lib/stockApi';
 import { getZoneColorHex, getZoneNameTh } from '../../lib/cdcIndicator';
 import { getQualityScoreTheme } from '../../lib/scannerEngine';
+import { TechnicalStatusBadges } from './TechnicalStatusBadges';
 import { ArrowDownRight, ArrowUpRight, Award, Info, Sparkles, Star, TrendingUp, Zap } from 'lucide-react';
 
 interface ScannerStockGridProps {
@@ -82,6 +83,15 @@ export const ScannerStockGrid: React.FC<ScannerStockGridProps> = ({
               </span>
             </div>
 
+            {/* Technical Status Badges: BULLISH, BREAKOUT, DIVERGENCE */}
+            {(stock.isBullish || stock.isBreakout || stock.isDivergence) && (
+              <TechnicalStatusBadges
+                isBullish={stock.isBullish}
+                isBreakout={stock.isBreakout}
+                isDivergence={stock.isDivergence}
+              />
+            )}
+
             {/* CDC QUALITY SCORE CARD METER */}
             <div
               onClick={() => onShowBreakdown(stock)}
@@ -114,9 +124,9 @@ export const ScannerStockGrid: React.FC<ScannerStockGridProps> = ({
               {/* Sub info: Entry Timing Badge & Golden Cross Info */}
               <div className="flex items-center justify-between text-[10px] text-slate-300 mt-2 pt-1 border-t border-slate-800/40">
                 <span className="font-semibold">{stock.entryTimingLabel}</span>
-                {stock.barsSinceGoldenCross <= 1 && (stock.zone === 'BLUE' || stock.zone === 'GREEN') ? (
+                {stock.barsSinceGoldenCross <= 2 && stock.zone === 'GREEN' ? (
                   <span className="text-emerald-300 font-extrabold flex items-center bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/40 shadow-sm animate-pulse">
-                    <Sparkles className="w-3 h-3 mr-0.5" /> จุดเข้าแรก!
+                    <Sparkles className="w-3 h-3 mr-0.5" /> เขียวซื้อสด!
                   </span>
                 ) : (
                   <span className="text-slate-500 font-mono">GC: {stock.barsSinceGoldenCross} แท่ง</span>

@@ -28,6 +28,8 @@ interface HeaderProps {
   pttPrice?: number;
   cpallPrice?: number;
   tickers?: StockTicker24h[];
+  tickerStatus?: 'loading' | 'ready' | 'error';
+  onRetryTickers?: () => void;
   onSelectSymbol?: (symbol: string) => void;
 }
 
@@ -42,6 +44,8 @@ export const Header: React.FC<HeaderProps> = ({
   pttPrice,
   cpallPrice,
   tickers = [],
+  tickerStatus = 'loading',
+  onRetryTickers,
   onSelectSymbol,
 }) => {
   // Duplicate ticker list for seamless 100% infinite marquee loop
@@ -50,35 +54,35 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="bg-slate-900 border-b border-slate-800 text-slate-100 sticky top-0 z-40 shadow-lg">
       {/* Top Bar: Title, Running Live Ticker, Paper Account & Settings */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-3 flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-3 sm:gap-4">
         {/* Brand & Title */}
-        <div className="flex items-center space-x-3 shrink-0">
-          <div className="bg-gradient-to-tr from-emerald-500 via-teal-500 to-blue-600 p-2.5 rounded-xl shadow-md flex items-center justify-center">
-            <TrendingUp className="w-6 h-6 text-white" />
+        <div className="flex min-w-0 items-center space-x-2 sm:space-x-3 sm:shrink-0">
+          <div className="shrink-0 bg-gradient-to-tr from-emerald-500 via-teal-500 to-blue-600 p-2 sm:p-2.5 rounded-xl shadow-md flex items-center justify-center">
+            <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
           </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <h1 className="text-base sm:text-lg font-bold tracking-tight text-white flex items-center gap-1.5 sm:gap-2">
                 CDC Action Zone <span className="text-emerald-400 font-extrabold">V2</span>
               </h1>
-              <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
+              <span className="text-[10px] sm:text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 sm:px-2 py-0.5 rounded-full font-medium">
                 SET Thai Stock Bot
               </span>
             </div>
-            <p className="text-xs text-slate-400">ระบบบอทเทรดหุ้นไทยตามสัญญาณอินดิเคเตอร์ Chaloke.org (ลุงโฉลก)</p>
+            <p className="mt-0.5 text-[10px] leading-snug sm:text-xs text-slate-400">ระบบบอทเทรดหุ้นไทยตามสัญญาณอินดิเคเตอร์ Chaloke.org (ลุงโฉลก)</p>
           </div>
         </div>
 
 
         {/* Right Action Controls: Mode, Balance, Bot Switch, Settings */}
-        <div className="flex items-center space-x-3">
+        <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-2 sm:w-auto sm:flex-nowrap sm:space-x-3 sm:gap-0">
           {/* Paper Balance Badge */}
           {botConfig.mode === 'PAPER' ? (
-            <div className="flex items-center space-x-2 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs">
-              <Wallet className="w-4 h-4 text-emerald-400" />
+            <div className="flex min-w-0 items-center space-x-1.5 sm:space-x-2 bg-slate-800 border border-slate-700 px-2 sm:px-3 py-1.5 rounded-lg text-xs">
+              <Wallet className="w-4 h-4 shrink-0 text-emerald-400" />
               <div>
-                <span className="text-slate-400 block text-[10px] leading-tight">พอร์ตจำลอง (Paper)</span>
-                <span className="font-mono font-bold text-white text-xs">
+                <span className="text-slate-400 block text-[9px] sm:text-[10px] leading-tight">พอร์ตจำลอง (Paper)</span>
+                <span className="font-mono font-bold text-white text-[11px] sm:text-xs">
                   ฿{paperAccount.usdtBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               </div>
@@ -97,42 +101,44 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
 
-          {/* Quick Bot Toggle Button */}
-          <button
-            onClick={onToggleBot}
-            className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold shadow transition ${
-              botConfig.isActive
-                ? 'bg-rose-600 hover:bg-rose-500 text-white animate-pulse'
-                : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-            }`}
-          >
-            {botConfig.isActive ? (
-              <>
-                <Pause className="w-3.5 h-3.5 fill-current" />
-                <span>หยุด บอท</span>
-              </>
-            ) : (
-              <>
-                <Play className="w-3.5 h-3.5 fill-current" />
-                <span>เปิดใช้งาน บอท</span>
-              </>
-            )}
-          </button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* Quick Bot Toggle Button */}
+            <button
+              onClick={onToggleBot}
+              className={`flex shrink-0 items-center space-x-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold shadow transition ${
+                botConfig.isActive
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white animate-pulse'
+                  : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+              }`}
+            >
+              {botConfig.isActive ? (
+                <>
+                  <Pause className="w-3.5 h-3.5 fill-current" />
+                  <span>หยุด บอท</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>เปิดใช้งาน บอท</span>
+                </>
+              )}
+            </button>
 
-          {/* Settings Modal Button */}
-          <button
-            onClick={onOpenSettings}
-            className="p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white rounded-lg transition"
-            title="ตั้งค่า Settrade API Key / โหมดการเทรด"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+            {/* Settings Modal Button */}
+            <button
+              onClick={onOpenSettings}
+              className="shrink-0 p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white rounded-lg transition"
+              title="ตั้งค่า Settrade API Key / โหมดการเทรด"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Navigation Tabs Bar */}
-      <div className="bg-slate-950/80 border-t border-slate-800/80 px-3 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto flex space-x-1 sm:space-x-2 overflow-x-auto py-2 scrollbar-none touch-pan-x overscroll-x-contain">
+      <div className="bg-slate-950/80 border-t border-slate-800/80">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-2 overflow-x-auto py-2 scrollbar-none touch-pan-x overscroll-x-contain">
           <button
             onClick={() => setActiveTab('chart')}
             className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-xs font-medium transition whitespace-nowrap ${
@@ -232,46 +238,58 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Live Running Ticker Tape — แถบราคาวิ่ง ล่างสุดของ Header */}
-      <div className="bg-slate-950 border-t border-slate-800/60 relative overflow-hidden">
-        {/* Gradient Edge Masks */}
-        <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-slate-950 to-transparent z-10 pointer-events-none" />
-        <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-950 to-transparent z-10 pointer-events-none" />
+      <div className="bg-slate-950 border-t border-slate-800/60">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative overflow-hidden">
+          {/* Gradient Edge Masks */}
+          <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-slate-950 to-transparent z-10 pointer-events-none" />
+          <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-950 to-transparent z-10 pointer-events-none" />
 
-        {tickers.length > 0 ? (
-          <div className="animate-marquee flex items-center space-x-6 text-xs whitespace-nowrap py-1.5 px-4">
-            {displayTickerItems.map((t, idx) => {
-              const isPositive = t.priceChangePercent >= 0;
-              const formattedPrice = formatStockPrice(t.lastPrice);
-              return (
-                <div
-                  key={`ticker-bottom-${t.symbol}-${idx}`}
-                  onClick={() => onSelectSymbol && onSelectSymbol(t.symbol)}
-                  className="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-800/70 px-2 py-0.5 rounded transition group/item"
-                  title={`คลิกเพื่อดูชาร์ต ${t.symbol}`}
-                >
-                  <span className="text-slate-400 font-semibold group-hover/item:text-emerald-400 transition">
-                    {t.symbol}:
-                  </span>
-                  <span className="font-mono font-bold text-white">{formattedPrice}</span>
-                  <span
-                    className={`font-mono text-[11px] font-bold ${
-                      isPositive ? 'text-emerald-400' : 'text-rose-400'
-                    }`}
+          {tickers.length > 0 ? (
+            <div className="animate-marquee flex items-center space-x-6 text-xs whitespace-nowrap py-1.5">
+              {displayTickerItems.map((t, idx) => {
+                const isPositive = t.priceChangePercent >= 0;
+                const formattedPrice = formatStockPrice(t.lastPrice);
+                return (
+                  <div
+                    key={`ticker-bottom-${t.symbol}-${idx}`}
+                    onClick={() => onSelectSymbol && onSelectSymbol(t.symbol)}
+                    className="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-800/70 px-2 py-0.5 rounded transition group/item"
+                    title={`คลิกเพื่อดูชาร์ต ${t.symbol}`}
                   >
-                    {isPositive ? `+${t.priceChangePercent.toFixed(2)}%` : `${t.priceChangePercent.toFixed(2)}%`}
-                  </span>
-                  <span className="text-slate-700 font-bold ml-3">|</span>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="flex items-center space-x-4 text-xs text-slate-500 py-1.5 px-6 animate-pulse">
-            <span>กำลังดึงราคาหุ้นไทยทั้งหมดในระบบ...</span>
-            {pttPrice && <span className="font-mono text-emerald-400/70">PTT: ฿{pttPrice.toLocaleString()}</span>}
-            {cpallPrice && <span className="font-mono text-cyan-400/70">CPALL: ฿{cpallPrice.toLocaleString()}</span>}
-          </div>
-        )}
+                    <span className="text-slate-400 font-semibold group-hover/item:text-emerald-400 transition">
+                      {t.symbol}:
+                    </span>
+                    <span className="font-mono font-bold text-white">{formattedPrice}</span>
+                    <span
+                      className={`font-mono text-[11px] font-bold ${
+                        isPositive ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {isPositive ? `+${t.priceChangePercent.toFixed(2)}%` : `${t.priceChangePercent.toFixed(2)}%`}
+                    </span>
+                    <span className="text-slate-700 font-bold ml-3">|</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : tickerStatus === 'error' ? (
+            <div className="flex items-center space-x-3 text-xs py-1.5">
+              <span className="text-amber-400 font-semibold">⚠️ ดึงราคาหุ้นไม่สำเร็จ</span>
+              <button
+                onClick={onRetryTickers}
+                className="text-emerald-400 hover:text-emerald-300 underline underline-offset-2 font-semibold cursor-pointer"
+              >
+                ลองใหม่อีกครั้ง
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-4 text-xs text-slate-500 py-1.5 animate-pulse">
+              <span>กำลังดึงราคาหุ้นไทยทั้งหมดในระบบ...</span>
+              {pttPrice && <span className="font-mono text-emerald-400/70">PTT: ฿{pttPrice.toLocaleString()}</span>}
+              {cpallPrice && <span className="font-mono text-cyan-400/70">CPALL: ฿{cpallPrice.toLocaleString()}</span>}
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

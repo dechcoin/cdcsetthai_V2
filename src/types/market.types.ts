@@ -3,7 +3,7 @@
  * shared by the price feed, indicators, charts and the scanner.
  */
 
-export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | '1w';
+export type Timeframe = '1m' | '5m' | '15m' | '30m' | '45m' | '1h' | '4h' | '1d' | '1w';
 
 export type CDCZoneColor = 'GREEN' | 'BLUE' | 'YELLOW' | 'RED' | 'ORANGE' | 'CYAN';
 
@@ -23,6 +23,11 @@ export interface KlineData {
   signal?: CDCSignalType;
   colorNameTh?: string;
   actionRecommendation?: string;
+  emaBaseline?: number;
+  rsi?: number;
+  atr?: number;
+  rvol?: number;
+  vwap?: number;
 }
 
 export interface StockTicker24h {

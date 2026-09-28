@@ -1,4 +1,5 @@
 import type { KlineData } from '../../src/types';
+import { stripFormingCandle as stripClosedCandles } from '../../src/lib/marketTime';
 
 /**
  * Market data service: SET trading-hours logic plus a Yahoo Finance client with
@@ -123,17 +124,7 @@ function getBangkokWeekKey(parts: { dateKey: string }): string {
  * price.
  */
 export function stripFormingCandle(candles: KlineData[], interval: string): KlineData[] {
-  if (interval !== '1d' && interval !== '1w') return candles;
-  if (candles.length < 2) return candles;
-
-  const last = candles[candles.length - 1];
-  const now = getBangkokParts(new Date());
-  const lastParts = getBangkokParts(new Date(last.time));
-
-  if (interval === '1w') {
-    return getBangkokWeekKey(now) === getBangkokWeekKey(lastParts) ? candles.slice(0, -1) : candles;
-  }
-  return now.dateKey === lastParts.dateKey ? candles.slice(0, -1) : candles;
+  return stripClosedCandles(candles, interval);
 }
 
 
@@ -145,6 +136,8 @@ const KLINE_CACHE_TTL_MS: Record<string, number> = {
   '1m': 15000,
   '5m': 30000,
   '15m': 60000,
+  '30m': 120000,
+  '45m': 120000,
   '1h': 120000,
   '4h': 300000,
   '1d': 300000,
@@ -157,7 +150,7 @@ function klineCacheTTL(interval: string): number {
 }
 
 /** Fetches candles straight from Yahoo Finance (no cache) and applies backoff on failure. */
-export async function fetchKlinesDirect(symbol: string, interval: string, limit = 300): Promise<KlineData[]> {
+export async function fetchKlinesDirect(symbol: string, interval: string, limit = 750): Promise<KlineData[]> {
   try {
     if (Date.now() < yahooBackoffUntil) return [];
     let cleanSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'PTT';
@@ -165,6 +158,8 @@ export async function fetchKlinesDirect(symbol: string, interval: string, limit 
 
     let yahooInterval = '1d';
     let step = 86400;
+    let bucketSeconds = 0;
+
     switch (interval) {
       case '1m':
         yahooInterval = '1m';
@@ -178,13 +173,25 @@ export async function fetchKlinesDirect(symbol: string, interval: string, limit 
         yahooInterval = '15m';
         step = 900;
         break;
+      case '30m':
+        yahooInterval = '30m';
+        step = 1800;
+        break;
+      case '45m':
+        yahooInterval = '15m';
+        step = 2700;
+        bucketSeconds = 2700;
+        break;
       case '1h':
+      case '60m':
         yahooInterval = '60m';
         step = 3600;
         break;
       case '4h':
+      case '240m':
         yahooInterval = '60m';
         step = 14400;
+        bucketSeconds = 14400;
         break;
       case '1d':
         yahooInterval = '1d';
@@ -196,7 +203,8 @@ export async function fetchKlinesDirect(symbol: string, interval: string, limit 
         break;
     }
     const to = Math.floor(Date.now() / 1000);
-    const from = to - limit * step;
+    const calendarFactor = (interval === '1d' || interval === '1w') ? 1.5 : 1;
+    const from = to - Math.floor(limit * step * calendarFactor);
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=${yahooInterval}&period1=${from}&period2=${to}`;
 
     const res = await fetch(url, {
@@ -216,7 +224,7 @@ export async function fetchKlinesDirect(symbol: string, interval: string, limit 
     const quote = result.indicators?.quote?.[0];
     if (!quote) return [];
 
-    const klines: KlineData[] = [];
+    const rawKlines: KlineData[] = [];
     for (let i = 0; i < result.timestamp.length; i++) {
       const t = result.timestamp[i];
       const o = quote.open?.[i];
@@ -227,7 +235,7 @@ export async function fetchKlinesDirect(symbol: string, interval: string, limit 
 
       if (o == null || h == null || l == null || c == null) continue;
 
-      klines.push({
+      rawKlines.push({
         time: t,
         open: Number(o),
         high: Number(h),
@@ -236,7 +244,58 @@ export async function fetchKlinesDirect(symbol: string, interval: string, limit 
         volume: Number(v),
       });
     }
-    return klines;
+
+    if (bucketSeconds > 0 && rawKlines.length > 0) {
+      const aggregated: KlineData[] = [];
+      let currentBucket = -1;
+      let curOpen = 0;
+      let curHigh = -Infinity;
+      let curLow = Infinity;
+      let curClose = 0;
+      let curVolume = 0;
+
+      for (const k of rawKlines) {
+        const bucket = Math.floor(k.time / bucketSeconds) * bucketSeconds;
+        if (bucket !== currentBucket) {
+          if (currentBucket !== -1) {
+            aggregated.push({
+              time: currentBucket,
+              open: curOpen,
+              high: curHigh,
+              low: curLow,
+              close: curClose,
+              volume: curVolume,
+            });
+          }
+          currentBucket = bucket;
+          curOpen = k.open;
+          curHigh = k.high;
+          curLow = k.low;
+          curClose = k.close;
+          curVolume = k.volume;
+        } else {
+          curHigh = Math.max(curHigh, k.high);
+          curLow = Math.min(curLow, k.low);
+          curClose = k.close;
+          curVolume += k.volume;
+        }
+      }
+
+      if (currentBucket !== -1) {
+        aggregated.push({
+          time: currentBucket,
+          open: curOpen,
+          high: curHigh,
+          low: curLow,
+          close: curClose,
+          volume: curVolume,
+        });
+      }
+
+      return aggregated;
+    }
+
+    return rawKlines;
   } catch (err) {
     yahooBackoffUntil = Date.now() + 15000;
     return [];
@@ -244,11 +303,192 @@ export async function fetchKlinesDirect(symbol: string, interval: string, limit 
 }
 
 /** Timeframe-aware cached read used by the 24/7 trading engine. */
-export async function fetchKlinesCached(symbol: string, interval: string, limit = 300): Promise<KlineData[]> {
+export async function fetchKlinesCached(symbol: string, interval: string, limit = 750): Promise<KlineData[]> {
   const key = `${symbol.toUpperCase()}|${interval}`;
   const cached = klineCache.get(key);
   if (cached && Date.now() - cached.ts < klineCacheTTL(interval)) return cached.data;
   const data = await fetchKlinesDirect(symbol, interval, limit);
   if (data.length > 0) klineCache.set(key, { data, ts: Date.now() });
   return data;
+}
+
+// ==================== YAHOO QUOTES CLIENT (crumb-aware) ====================
+// Yahoo's v7/finance/quote now requires a session cookie + "crumb" (same flow the
+// yfinance library uses). v8/finance/spark is the crumb-free fallback but has no
+// volume / high / low fields.
+
+export interface YahooQuote {
+  symbol: string; // e.g. 'PTT' (no .BK suffix)
+  last: number;
+  changePercent: number;
+  volume: number;
+  dayHigh: number;
+  dayLow: number;
+}
+
+const YAHOO_QUOTE_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+const QUOTE_CACHE_TTL_MS = 60_000; // 60s — tape polls every ~20s; the cache absorbs the rest
+const quoteCache = new Map<string, { data: Record<string, YahooQuote>; ts: number }>();
+const quoteInFlight = new Map<string, Promise<Record<string, YahooQuote>>>();
+
+interface YahooSession {
+  cookie: string;
+  crumb: string;
+  fetchedAt: number;
+}
+
+let yahooSession: YahooSession | null = null;
+const SESSION_TTL_MS = 30 * 60 * 1000;
+
+function extractCookies(res: Response): string {
+  try {
+    const setCookies = res.headers.getSetCookie?.() ?? [];
+    const single = res.headers.get('set-cookie');
+    const all = setCookies.length > 0 ? setCookies : single ? [single] : [];
+    return all
+      .map((c) => c.split(';')[0])
+      .filter(Boolean)
+      .join('; ');
+  } catch {
+    return '';
+  }
+}
+
+async function fetchYahooCrumb(): Promise<YahooSession | null> {
+  try {
+    // 404 is expected here — the request is only used to collect Yahoo's `A3` cookie.
+    const fcRes = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': YAHOO_QUOTE_UA } });
+    const cookie = extractCookies(fcRes);
+    if (!cookie) return null;
+
+    const crumbRes = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+      headers: { 'User-Agent': YAHOO_QUOTE_UA, Cookie: cookie },
+    });
+    if (!crumbRes.ok) return null;
+    const crumb = (await crumbRes.text()).trim();
+    if (!crumb) return null;
+    return { cookie, crumb, fetchedAt: Date.now() };
+  } catch {
+    return null;
+  }
+}
+
+async function getYahooSession(force = false): Promise<YahooSession | null> {
+  if (!force && yahooSession && Date.now() - yahooSession.fetchedAt < SESSION_TTL_MS) {
+    return yahooSession;
+  }
+  const session = await fetchYahooCrumb();
+  if (session) yahooSession = session;
+  return session;
+}
+
+async function fetchQuotesV7(symbols: string[]): Promise<Record<string, YahooQuote>> {
+  const result: Record<string, YahooQuote> = {};
+  let session = await getYahooSession();
+  if (!session) return result;
+
+  const doFetch = (s: YahooSession) => {
+    const yahooSymbols = symbols.map((x) => `${x}.BK`).join(',');
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSymbols}&crumb=${encodeURIComponent(s.crumb)}`;
+    return fetch(url, { headers: { 'User-Agent': YAHOO_QUOTE_UA, Cookie: s.cookie } });
+  };
+
+  let res = await doFetch(session);
+  if (res.status === 401 || res.status === 403) {
+    // crumb expired — refresh once and retry
+    const fresh = await getYahooSession(true);
+    if (fresh) {
+      session = fresh;
+      res = await doFetch(session);
+    }
+  }
+  if (!res.ok) return result;
+
+  const data = await res.json();
+  const quotes = data?.quoteResponse?.result || [];
+  for (const q of quotes) {
+    const rawSym = String(q.symbol || '').replace('.BK', '').toUpperCase();
+    if (!rawSym) continue;
+    const last = Number(q.regularMarketPrice) || 0;
+    if (last <= 0) continue;
+    result[rawSym] = {
+      symbol: rawSym,
+      last,
+      changePercent: Number(q.regularMarketChangePercent) || 0,
+      volume: Number(q.regularMarketVolume) || 0,
+      dayHigh: Number(q.regularMarketDayHigh) || last,
+      dayLow: Number(q.regularMarketDayLow) || last,
+    };
+  }
+  return result;
+}
+
+async function fetchQuotesSpark(symbols: string[]): Promise<Record<string, YahooQuote>> {
+  const result: Record<string, YahooQuote> = {};
+  const batchSize = 20; // spark rejects >~20 symbols per request
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    const batch = symbols.slice(i, i + batchSize);
+    const yahooSymbols = batch.map((x) => `${x}.BK`).join(',');
+    const url = `https://query1.finance.yahoo.com/v8/finance/spark?symbols=${yahooSymbols}&range=5d&interval=1d`;
+    try {
+      const res = await fetch(url, { headers: { 'User-Agent': YAHOO_QUOTE_UA } });
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const [key, spark] of Object.entries(data)) {
+        const rawSym = key.replace('.BK', '').toUpperCase();
+        const s = spark as any;
+        const closes: number[] = Array.isArray(s?.close) ? s.close.map(Number) : [];
+        const last = Number(s?.fulldayPrice) || (closes.length > 0 ? closes[closes.length - 1] : 0);
+        if (last <= 0) continue;
+        let changePercent = Number(s?.fulldayChangePercent) || 0;
+        if (!changePercent && closes.length >= 2 && closes[closes.length - 2] > 0) {
+          changePercent = ((last - closes[closes.length - 2]) / closes[closes.length - 2]) * 100;
+        }
+        result[rawSym] = { symbol: rawSym, last, changePercent, volume: 0, dayHigh: last, dayLow: last };
+      }
+    } catch {
+      // skip a failed batch and keep going
+    }
+  }
+  return result;
+}
+
+/**
+ * Cached, rate-limited quote lookup for the SET ticker tape / order-book anchor.
+ * Tries the crumb-authenticated v7 endpoint first, then falls back to the
+ * crumb-free spark endpoint. Reuses the shared `yahooBackoffUntil` gate.
+ */
+export async function fetchQuotesCached(symbols: string[]): Promise<Record<string, YahooQuote>> {
+  const clean = symbols.map((s) => s.toUpperCase().replace(/[^A-Z0-9]/g, '')).filter(Boolean);
+  if (clean.length === 0) return {};
+
+  const cacheKey = clean.slice().sort().join(',');
+  const cached = quoteCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < QUOTE_CACHE_TTL_MS) return cached.data;
+
+  const existing = quoteInFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const p = (async () => {
+    if (Date.now() < yahooBackoffUntil) return {};
+    let quotes = await fetchQuotesV7(clean);
+    if (Object.keys(quotes).length === 0) {
+      quotes = await fetchQuotesSpark(clean);
+    }
+    if (Object.keys(quotes).length === 0) {
+      yahooBackoffUntil = Date.now() + 15000;
+      return {};
+    }
+    quoteCache.set(cacheKey, { data: quotes, ts: Date.now() });
+    return quotes;
+  })();
+
+  quoteInFlight.set(cacheKey, p);
+  try {
+    return await p;
+  } finally {
+    quoteInFlight.delete(cacheKey);
+  }
 }

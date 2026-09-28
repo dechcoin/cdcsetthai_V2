@@ -73,8 +73,8 @@ export function calculateCDCActionZone(
         if (isBullishCross || (prevCandle && (prevCandle.zone === 'YELLOW' || prevCandle.zone === 'RED' || prevCandle.zone === 'ORANGE'))) {
           zone = 'BLUE';
           signal = 'BUY';
-          colorNameTh = 'โซนฟ้า (สัญญาณซื้อ)';
-          actionRecommendation = 'เข้าซื้อ / Buy Trigger';
+          colorNameTh = 'โซนฟ้า (รอสัญญาณเขียว)';
+          actionRecommendation = 'รอยืนยันแท่งเขียว / Pre-signal';
         } else {
           zone = 'GREEN';
           signal = 'HOLD_BULL';
@@ -157,7 +157,7 @@ export function getZoneNameTh(zone?: CDCZoneColor): string {
     case 'GREEN':
       return 'โซนเขียว (Buy & Hold)';
     case 'BLUE':
-      return 'โซนฟ้า (Buy Signal)';
+      return 'โซนฟ้า (สัญญาณเตือนก่อนเขียว)';
     case 'YELLOW':
       return 'โซนเหลือง (Take Profit)';
     case 'RED':
@@ -222,10 +222,15 @@ export function getCrossoverInfo(candles: KlineData[]): CrossoverInfo {
 /**
  * "เขียวซื้อ" — Long entry per Uncle Chaloke's Confirmed Next-Bar Rule.
  * Matches the backtester so live trading and backtest stay consistent:
- *  - First BLUE candle (fresh buy trigger) when BLUE is in `buyZones`, or
+ *  - First BLUE candle only when an explicitly aggressive config includes BLUE, or
  *  - First GREEN candle that follows a BLUE/YELLOW/RED candle when GREEN is in `buyZones`.
+ * The standard SET strategy config selects GREEN only; BLUE is a pre-signal there.
  */
-export function isLongEntrySignal(candles: KlineData[], buyZones: ('BLUE' | 'GREEN')[]): boolean {
+export function isLongEntrySignal(
+  candles: KlineData[],
+  buyZones: ('BLUE' | 'GREEN')[],
+  options?: { strictGoldenCross?: boolean; maxBarsSinceCrossover?: number }
+): boolean {
   if (!candles || candles.length < 1) return false;
   const latest = candles[candles.length - 1];
   const prev = candles.length > 1 ? candles[candles.length - 2] : undefined;
@@ -239,7 +244,21 @@ export function isLongEntrySignal(candles: KlineData[], buyZones: ('BLUE' | 'GRE
     !!prevZone &&
     (prevZone === 'BLUE' || prevZone === 'YELLOW' || prevZone === 'RED');
 
-  return isFirstBlue || isFirstConfirmedGreen;
+  const hasTrigger = isFirstBlue || isFirstConfirmedGreen;
+  if (!hasTrigger) return false;
+
+  // Strict Golden Cross: In true CDC strategy, entry must be at the fresh Golden Cross
+  // (within first 2 bars of EMA12 crossing above EMA26). If the Golden Cross occurred
+  // long ago, a yellow-to-green pullback bounce is NOT a valid entry.
+  if (options?.strictGoldenCross !== false) {
+    const crossover = getCrossoverInfo(candles);
+    const maxBars = options?.maxBarsSinceCrossover ?? 2;
+    if (crossover.barsSinceGoldenCross > maxBars) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -302,7 +321,8 @@ export function calculateCdcQualityScore(params: {
     priceChange24h,
   } = params;
 
-  // 1. Golden Cross Entry Timing (0-35) - Focusing strictly on Uncle Chaloke's เขียวซื้อ แดงขาย
+  // 1. Golden Cross Entry Timing (0-35). Full recency points are reserved for
+  // a confirmed GREEN buy; BLUE is an alert to wait for that confirmation.
   let recencyScore = 2;
   let recencyDetail = `ผ่านจุดตัด Golden Cross มานานแล้ว (${barsSinceGoldenCross} แท่ง) ไม่ใช่จุดเข้าซื้อต้นรอบ`;
   let entryTimingCategory: 'PRIME_ENTRY' | 'EARLY_TREND' | 'MID_TREND' | 'LATE_STAGE' | 'BEAR_AVOID' = 'LATE_STAGE';
@@ -314,56 +334,68 @@ export function calculateCdcQualityScore(params: {
     recencyScore = 0;
     recencyDetail = 'โซนแดง ขาลงตามทฤษฎีแดงขาย ควรถือเงินสด';
   } else if (barsSinceGoldenCross === 0) {
-    recencyScore = 35;
-    recencyDetail = '🌟 จุดตัดสดใหม่แท่งแรก! (Golden Cross Bar 0)';
-    entryTimingCategory = 'PRIME_ENTRY';
-    entryTimingLabel = '🌟 จุดเข้าที่ดีที่สุด (จุดตัดแรก 0 แท่ง)';
+    if (zone === 'GREEN') {
+      recencyScore = 35;
+      recencyDetail = '🌟 Golden Cross สดใหม่และ CDC ยืนยันโซนเขียว';
+      entryTimingCategory = 'PRIME_ENTRY';
+      entryTimingLabel = '🌟 เขียวซื้อ (Golden Cross สดใหม่)';
+    } else {
+      recencyScore = 15;
+      recencyDetail = 'Golden Cross เพิ่งเกิด แต่ยังรอยืนยันโซนเขียวก่อนเข้า';
+      entryTimingCategory = 'EARLY_TREND';
+      entryTimingLabel = '🔵 สัญญาณเตือน — รอเขียวยืนยัน';
+    }
   } else if (barsSinceGoldenCross === 1) {
-    recencyScore = 35;
-    recencyDetail = '🌟 เขียวแรกคอนเฟิร์มตามทฤษฎีลุงโฉลก! (Golden Cross Bar 1 - จุดเข้าซื้อที่ดีที่สุด)';
-    entryTimingCategory = 'PRIME_ENTRY';
-    entryTimingLabel = '🌟 จุดเข้าที่ดีที่สุด (เขียวแรก 1 แท่ง)';
+    if (zone === 'GREEN') {
+      recencyScore = 35;
+      recencyDetail = '🌟 เขียวแรกยืนยัน Golden Cross — จุดเข้าต้นรอบ';
+      entryTimingCategory = 'PRIME_ENTRY';
+      entryTimingLabel = '🌟 เขียวซื้อ (แท่งยืนยันแรก)';
+    } else {
+      recencyScore = 15;
+      recencyDetail = 'Golden Cross เพิ่งเกิด แต่ยังรอยืนยันโซนเขียวก่อนเข้า';
+      entryTimingCategory = 'EARLY_TREND';
+      entryTimingLabel = '🔵 สัญญาณเตือน — รอเขียวยืนยัน';
+    }
   } else if (barsSinceGoldenCross <= 3) {
-    recencyScore = 25;
-    recencyDetail = `🌱 สัญญาณต้นรอบตามระบบ (${barsSinceGoldenCross} แท่งหลังจุดตัด)`;
+    recencyScore = zone === 'GREEN' ? 25 : 12;
+    recencyDetail = zone === 'GREEN'
+      ? `🌱 โซนเขียวในช่วงต้นรอบ (${barsSinceGoldenCross} แท่งหลังจุดตัด)`
+      : `Golden Cross ยังใหม่ แต่ยังไม่มีโซนเขียวยืนยัน (${barsSinceGoldenCross} แท่ง)`;
     entryTimingCategory = 'EARLY_TREND';
-    entryTimingLabel = `🌱 ต้นรอบ (${barsSinceGoldenCross} แท่ง)`;
+    entryTimingLabel = zone === 'GREEN' ? `🌱 ต้นรอบ (${barsSinceGoldenCross} แท่ง)` : '🔵 สัญญาณเตือน — รอเขียวยืนยัน';
   } else if (barsSinceGoldenCross <= 7) {
-    recencyScore = 15;
+    recencyScore = zone === 'GREEN' ? 15 : 8;
     recencyDetail = `📈 เทรนด์กำลังดำเนินระดับกลาง (${barsSinceGoldenCross} แท่งหลังจุดตัด)`;
     entryTimingCategory = 'MID_TREND';
-    entryTimingLabel = `📈 กลางเทรนด์ (${barsSinceGoldenCross} แท่ง)`;
+    entryTimingLabel = zone === 'GREEN' ? `📈 กลางเทรนด์ (${barsSinceGoldenCross} แท่ง)` : 'รอสัญญาณ CDC เขียว';
   } else if (barsSinceGoldenCross <= 15) {
-    recencyScore = 8;
+    recencyScore = zone === 'GREEN' ? 8 : 4;
     recencyDetail = `เทรนด์ดำเนินมาระยะหนึ่ง (${barsSinceGoldenCross} แท่งหลังจุดตัด)`;
     entryTimingCategory = 'MID_TREND';
-    entryTimingLabel = `เทรนด์ต่อเนื่อง (${barsSinceGoldenCross} แท่ง)`;
+    entryTimingLabel = zone === 'GREEN' ? `เทรนด์ต่อเนื่อง (${barsSinceGoldenCross} แท่ง)` : 'รอสัญญาณ CDC เขียว';
   }
 
   // 2. Zone (0-25)
   let zoneScore = 0;
   let zoneDetail = 'โซนแดง ขาลง / ควรถือเงินสด';
-  if (zone === 'BLUE' && barsSinceGoldenCross <= 1) {
+  if (zone === 'GREEN' && barsSinceGoldenCross <= 1) {
     zoneScore = 25;
-    zoneDetail = 'โซนฟ้า จุดเริ่มรอบใหม่พร้อม Golden Cross (Buy Trigger)';
-  } else if (zone === 'GREEN' && barsSinceGoldenCross <= 1) {
-    zoneScore = 25;
-    zoneDetail = 'โซนเขียว เขียวแรกคอนเฟิร์มจุดเริ่มรอบตามทฤษฎีลุงโฉลก (เขียวซื้อ)';
+    zoneDetail = 'โซนเขียวและ Golden Cross สด — ผ่านเงื่อนไขเขียวซื้อ';
   } else if (zone === 'GREEN' && barsSinceGoldenCross <= 5) {
-    zoneScore = 20;
-    zoneDetail = 'โซนเขียว รันเทรนด์ต้นรอบแข็งแกร่ง (Strong Bull)';
+    zoneScore = 22;
+    zoneDetail = 'โซนเขียวในช่วงต้นรอบ (Strong Bull)';
   } else if (zone === 'GREEN') {
-    zoneScore = 15;
+    zoneScore = 16;
     zoneDetail = 'โซนเขียว รันเทรนด์ขาขึ้นต่อเนื่อง (Bull Trend)';
   } else if (zone === 'BLUE') {
-    // Rebound after yellow in old trend
     zoneScore = 8;
-    zoneDetail = 'โซนฟ้า เด้งตามเทรนด์เดิมหลังย่อตัว (ไม่ใช่จุดตัดต้นรอบใหญ่)';
+    zoneDetail = 'โซนฟ้าเป็นสัญญาณเตือน — รอแท่งเขียวยืนยันก่อนซื้อ';
   } else if (zone === 'CYAN') {
     zoneScore = 5;
     zoneDetail = 'โซนไซแอน ไซด์เวย์ พักตัวรอทิศทาง';
   } else if (zone === 'ORANGE') {
-    zoneScore = 4;
+    zoneScore = 2;
     zoneDetail = 'โซนส้ม รีบาวด์ระยะสั้นในขาลง';
   } else if (zone === 'YELLOW') {
     zoneScore = 2;
@@ -408,24 +440,35 @@ export function calculateCdcQualityScore(params: {
     volumeDetail = `วอลุ่มระดับพอใช้ (฿${volMil.toFixed(1)}M)`;
   }
 
-  // 5. Price Change 24h % (0-10)
-  let priceScore = 1;
-  let priceDetail = `ราคาติดลบหนัก (${priceChange24h.toFixed(2)}%)`;
-  if (priceChange24h >= 2.0 && priceChange24h <= 7.0) {
-    priceScore = 10;
-    priceDetail = `โมเมนตัมกำลังสวย ไม่ overbought (+${priceChange24h.toFixed(2)}%)`;
-  } else if (priceChange24h > 0.5 && priceChange24h < 2.0) {
-    priceScore = 8;
-    priceDetail = `เริ่มขยับบวกเบาๆ (+${priceChange24h.toFixed(2)}%)`;
-  } else if (priceChange24h > 7.0) {
-    priceScore = 6;
-    priceDetail = `พุ่งแรง ระวังการไล่ราคา (+${priceChange24h.toFixed(2)}%)`;
-  } else if (priceChange24h >= 0.0 && priceChange24h <= 0.5) {
+  // 5. Price Change 24h % (0-10): favor early/contained movement, not chasing.
+  let priceScore = 0;
+  let priceDetail = `ราคาลบแรง — ไม่ให้แต้มโมเมนตัม (${priceChange24h.toFixed(2)}%)`;
+  if (zone === 'RED') {
+    priceDetail = `โซนแดงมีลำดับเหนือกว่าโมเมนตัม — งดซื้อ (${priceChange24h.toFixed(2)}%)`;
+  } else if (priceChange24h < -5) {
+    priceScore = 0;
+    priceDetail = `ราคาลบแรง ระวังฐานเสีย (${priceChange24h.toFixed(2)}%)`;
+  } else if (priceChange24h < -2) {
+    priceScore = 2;
+    priceDetail = `ราคาย่อลึก ต้องรอสัญญาณเขียวที่ชัด (${priceChange24h.toFixed(2)}%)`;
+  } else if (priceChange24h < -0.5) {
     priceScore = 5;
-    priceDetail = `ราคาทรงตัว (+${priceChange24h.toFixed(2)}%)`;
-  } else if (priceChange24h >= -2.0 && priceChange24h < 0.0) {
-    priceScore = 3;
-    priceDetail = `ย่อตัวเล็กน้อย (${priceChange24h.toFixed(2)}%)`;
+    priceDetail = `ราคาย่อปานกลาง (${priceChange24h.toFixed(2)}%)`;
+  } else if (priceChange24h <= 0.5) {
+    priceScore = 9;
+    priceDetail = `ราคาแกว่งแคบ เหมาะกับการรอจังหวะต้นรอบ (${priceChange24h >= 0 ? '+' : ''}${priceChange24h.toFixed(2)}%)`;
+  } else if (priceChange24h <= 2) {
+    priceScore = 10;
+    priceDetail = `โมเมนตัมบวกพอดี ไม่ไล่ราคามากเกินไป (+${priceChange24h.toFixed(2)}%)`;
+  } else if (priceChange24h <= 4) {
+    priceScore = 8;
+    priceDetail = `โมเมนตัมบวก แต่เริ่มยืดตัว (+${priceChange24h.toFixed(2)}%)`;
+  } else if (priceChange24h <= 7) {
+    priceScore = 5;
+    priceDetail = `ราคาขึ้นแรง ลดแต้มเพื่อเลี่ยงการไล่ราคา (+${priceChange24h.toFixed(2)}%)`;
+  } else {
+    priceScore = 2;
+    priceDetail = `ราคาพุ่งแรงมาก — เสี่ยงไล่ราคา (+${priceChange24h.toFixed(2)}%)`;
   }
 
   const totalScore = Math.min(100, Math.max(0, recencyScore + zoneScore + trendScore + volumeScore + priceScore));

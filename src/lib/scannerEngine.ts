@@ -1,6 +1,8 @@
 import type { ScannerStockResult, Timeframe } from '../types';
 import { calculateCDCActionZone, calculateCdcQualityScore, getBarsSinceZoneChange, getCrossoverInfo } from './cdcIndicator';
 import { fetchStockKlines, fetchStockTicker24h } from './stockApi';
+import { assessDailyPricePosition, detectTechnicalStatus } from './quantEngine';
+import { stripFormingCandle } from './marketTime';
 
 /**
  * Pure scanner business logic, extracted from `MarketScanner.tsx`.
@@ -20,7 +22,10 @@ export type SignalFilterType =
   | 'QUALITY_HIGH'
   | 'FRESH_SIGNAL'
   | 'HIGH_VOLUME'
-  | 'TOP_GAINERS';
+  | 'TOP_GAINERS'
+  | 'BULLISH'
+  | 'BREAKOUT'
+  | 'DIVERGENCE';
 
 export type SortOption = 'SCORE_DESC' | 'CHANGE_DESC' | 'CHANGE_ASC' | 'VOLUME_DESC' | 'RECENCY_ASC' | 'SYMBOL_ASC';
 
@@ -76,7 +81,8 @@ export async function scanSymbols(
       chunk.map(async (sym) => {
         try {
           const rawCandles = await fetchStockKlines(sym, timeframe, SCAN_KLINE_LIMIT);
-          const cdcCandles = calculateCDCActionZone(rawCandles, SCAN_FAST_EMA, SCAN_SLOW_EMA);
+          const timeframeCandles = stripFormingCandle(rawCandles, timeframe);
+          const cdcCandles = calculateCDCActionZone(timeframeCandles, SCAN_FAST_EMA, SCAN_SLOW_EMA);
 
           if (cdcCandles.length > 0) {
             const latest = cdcCandles[cdcCandles.length - 1];
@@ -89,7 +95,7 @@ export async function scanSymbols(
               : prev.close > 0
               ? ((currentPrice - prev.close) / prev.close) * 100
               : 0;
-            const volume24h = ticker ? ticker.quoteVolume : latest.volume * latest.close;
+            const volume24h = ticker && ticker.quoteVolume > 0 ? ticker.quoteVolume : latest.volume * latest.close;
 
             const trendStrength =
               latest.emaFast && latest.emaSlow && latest.emaSlow > 0
@@ -111,6 +117,8 @@ export async function scanSymbols(
               volume24h,
               priceChange24h,
             });
+            const pricePosition = assessDailyPricePosition(timeframeCandles);
+            const technicalStatus = detectTechnicalStatus(timeframeCandles, cdcCandles);
 
             results.push({
               symbol: sym,
@@ -133,6 +141,10 @@ export async function scanSymbols(
               qualityScore: qualityBreakdown.totalScore,
               qualityGrade: qualityBreakdown.grade,
               qualityBreakdown,
+              pricePosition,
+              isBullish: technicalStatus.isBullish,
+              isBreakout: technicalStatus.isBreakout,
+              isDivergence: technicalStatus.isDivergence,
             });
           }
         } catch (e) {
@@ -172,7 +184,7 @@ export function filterAndSortStockResults(
       // Signal Filter Badges
       switch (signalFilter) {
         case 'PRIME_ENTRY':
-          return stock.barsSinceGoldenCross <= 1 && (stock.zone === 'BLUE' || stock.zone === 'GREEN');
+          return stock.barsSinceGoldenCross <= 2 && stock.zone === 'GREEN';
         case 'BUY_FRESH':
           return stock.zone === 'BLUE';
         case 'BULL_STRONG':
@@ -189,6 +201,12 @@ export function filterAndSortStockResults(
           return stock.volume24h >= HIGH_VOLUME_THRESHOLD_THB;
         case 'TOP_GAINERS':
           return stock.priceChange24h > 0;
+        case 'BULLISH':
+          return !!stock.isBullish;
+        case 'BREAKOUT':
+          return !!stock.isBreakout;
+        case 'DIVERGENCE':
+          return !!stock.isDivergence;
         case 'ALL':
         default:
           return true;
@@ -225,10 +243,10 @@ export interface ScannerSummaryMetrics {
 /** Aggregate numbers shown in the summary banner above the results. */
 export function calculateScannerSummary(results: ScannerStockResult[]): ScannerSummaryMetrics {
   const total = results.length;
-  const buySignals = results.filter((r) => r.zone === 'BLUE' || r.zone === 'GREEN').length;
+  const buySignals = results.filter((r) => r.zone === 'GREEN').length;
   const freshBuys = results.filter((r) => r.zone === 'BLUE').length;
   const primeEntries = results.filter(
-    (r) => r.barsSinceGoldenCross <= 1 && (r.zone === 'BLUE' || r.zone === 'GREEN')
+    (r) => r.barsSinceGoldenCross <= 2 && r.zone === 'GREEN'
   ).length;
   const topQuality = results.filter((r) => r.qualityScore >= TOP_QUALITY_SCORE).length;
   const avgScore = total > 0 ? Math.round(results.reduce((acc, r) => acc + r.qualityScore, 0) / total) : 0;

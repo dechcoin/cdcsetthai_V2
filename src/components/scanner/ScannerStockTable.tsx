@@ -3,6 +3,7 @@ import type { ScannerStockResult } from '../../types';
 import { formatStockPrice } from '../../lib/stockApi';
 import { getZoneColorHex, getZoneNameTh } from '../../lib/cdcIndicator';
 import { getQualityScoreTheme } from '../../lib/scannerEngine';
+import { TechnicalStatusBadges } from './TechnicalStatusBadges';
 import { Star } from 'lucide-react';
 
 interface ScannerStockTableProps {
@@ -61,9 +62,17 @@ export const ScannerStockTable: React.FC<ScannerStockTableProps> = ({
                     </button>
                   </td>
 
-                  {/* Symbol */}
+                  {/* Symbol & Technical Badges */}
                   <td className="py-3 px-4 font-black text-white text-sm">
-                    {stock.symbol}
+                    <div className="flex flex-col space-y-1">
+                      <span>{stock.symbol}</span>
+                      <TechnicalStatusBadges
+                        isBullish={stock.isBullish}
+                        isBreakout={stock.isBreakout}
+                        isDivergence={stock.isDivergence}
+                        size="sm"
+                      />
+                    </div>
                   </td>
 
                   {/* Price */}

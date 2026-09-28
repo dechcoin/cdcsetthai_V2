@@ -67,6 +67,12 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [manualPercent, setManualPercent] = useState<number>(botConfig.balancePercent || 20);
 
+  useEffect(() => {
+    if (!isEditing) {
+      setConfigForm({ ...botConfig });
+    }
+  }, [botConfig, isEditing]);
+
   // Active position for current symbol
   const activePos = paperAccount.activePositions.find((p) => p.symbol === botConfig.symbol);
 
@@ -76,6 +82,13 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
     0
   );
   const totalEquity = paperAccount.usdtBalance + totalPositionsValue;
+  const markedEquity = paperAccount.usdtBalance + paperAccount.activePositions.reduce(
+    (sum, position) => sum + Math.max(0, position.usdtInvested + (position.currentPnlUsdt || 0)),
+    0
+  );
+  const peakEquity = Math.max(paperAccount.peakEquityUsdt || paperAccount.initialUsdtBalance, markedEquity);
+  const currentDrawdown = peakEquity > 0 ? Math.max(0, (peakEquity - markedEquity) / peakEquity * 100) : 0;
+  const cooldownActive = (paperAccount.cooldownUntil || 0) > Date.now();
   const maxSlots = Math.max(1, Math.min(20, configForm.maxOpenPositions || 5));
   const equalWeightPerSlot = totalEquity / maxSlots;
 
@@ -156,6 +169,13 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
       trailingStopPercent: Number(configForm.trailingStopPercent) || 3,
       useTrailingStop: Boolean(configForm.useTrailingStop),
       useStopLossLock: configForm.useStopLossLock !== false,
+      usePartialTakeProfit: configForm.usePartialTakeProfit !== false,
+      partialTakeProfitR: Math.max(0.1, Number(configForm.partialTakeProfitR) || 1.5),
+      useQuantFilter: configForm.useQuantFilter !== false,
+      quantMinScore: Math.max(50, Math.min(100, Number(configForm.quantMinScore) || 80)),
+      strictGoldenCrossOnly: configForm.strictGoldenCrossOnly !== false,
+      maxBarsSinceCrossover: Math.max(1, Math.min(10, Number(configForm.maxBarsSinceCrossover) || 2)),
+      skipExtendedPrice: configForm.skipExtendedPrice !== false,
     };
     onSaveConfig(sanitizedConfig);
     setConfigForm(sanitizedConfig);
@@ -336,6 +356,33 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
               </div>
             </div>
           )}
+        </div>
+
+        <div className={`rounded-2xl border p-4 flex flex-wrap items-center justify-between gap-3 ${
+          paperAccount.riskHalted
+            ? 'bg-rose-950/40 border-rose-500/40'
+            : cooldownActive
+            ? 'bg-amber-950/30 border-amber-500/30'
+            : 'bg-slate-950/70 border-slate-800'
+        }`}>
+          <div>
+            <p className="text-xs font-bold text-slate-200">ระบบคุมความเสี่ยงพอร์ต Paper</p>
+            <p className="text-[10px] text-slate-400 mt-1">
+              ลดขนาดไม้เมื่อ Drawdown 5%/10% · หยุดเปิดไม้ที่ 15% · พัก 24 ชม. เมื่อแพ้ติดกัน 3 ไม้
+            </p>
+          </div>
+          <div className="text-right">
+            <p className={`font-mono font-black text-sm ${currentDrawdown >= 10 ? 'text-rose-300' : currentDrawdown >= 5 ? 'text-amber-300' : 'text-emerald-300'}`}>
+              Drawdown {currentDrawdown.toFixed(2)}%
+            </p>
+            <p className={`text-[10px] mt-1 ${paperAccount.riskHalted ? 'text-rose-300' : cooldownActive ? 'text-amber-300' : 'text-slate-500'}`}>
+              {paperAccount.riskHalted
+                ? 'HALT: รีเซ็ตพอร์ต Paper เพื่อปลดล็อกการเปิดไม้'
+                : cooldownActive
+                ? `พักเปิดไม้ถึง ${new Date(paperAccount.cooldownUntil || 0).toLocaleString('th-TH')}`
+                : `แพ้ติดกัน ${paperAccount.consecutiveLosses || 0}/3 ไม้`}
+            </p>
+          </div>
         </div>
 
         {/* ================= 1. ACTIVE POSITION / QUICK TRADE EXECUTION ================= */}
@@ -677,6 +724,8 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-emerald-400 font-bold font-mono focus:border-emerald-500 disabled:opacity-60"
                 >
                   <option value="15m">15m</option>
+                  <option value="30m">30m</option>
+                  <option value="45m">45m</option>
                   <option value="1h">1H</option>
                   <option value="4h">4H</option>
                   <option value="1d">1D (แนะนำ ⭐)</option>
@@ -857,7 +906,7 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
                 <span>Trailing Stop & Whipsaw Protection Engines</span>
               </span>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
                 {/* Trailing Stop */}
                 <div className="bg-slate-900/90 border border-slate-800 p-3 rounded-xl space-y-2">
                   <label className="flex items-center space-x-2 text-slate-200 font-bold cursor-pointer">
@@ -909,6 +958,142 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
                     ล็อกหุ้นที่โดน Stop Loss ไม่ให้เข้าซื้อซ้ำในรอบเดิม ป้องกันการโดนสับขาหลอกซ้ำๆ
                   </p>
                 </div>
+
+                {/* Partial Profit */}
+                <div className="bg-slate-900/90 border border-slate-800 p-3 rounded-xl space-y-2">
+                  <label className="flex items-center space-x-2 text-slate-200 font-bold cursor-pointer">
+                    <input
+                      type="checkbox"
+                      disabled={!isEditing}
+                      checked={configForm.usePartialTakeProfit !== false}
+                      onChange={(e) => setConfigForm({ ...configForm, usePartialTakeProfit: e.target.checked })}
+                      className="rounded bg-slate-950 border-slate-700 text-emerald-500 focus:ring-0"
+                    />
+                    <span>ขายทำกำไรบางส่วนที่ {configForm.partialTakeProfitR ?? 1.5}R</span>
+                  </label>
+                  <p className="text-[11px] text-slate-400">
+                    ขาย {configForm.partialTakeProfitPercent ?? 50}% (ปัดเป็น board lot) แล้วเลื่อน Stop หุ้นที่เหลือมาที่ทุน; ถ้าขนาดไม่พอหนึ่ง lotจะไม่ขายบางส่วน
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* ================= MIN BUY SCORE GATE & STRICT CDC FILTERS ================= */}
+            <div className="p-4 sm:p-5 bg-[#0b101b] border border-slate-800 rounded-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <Shield className="w-5 h-5 text-emerald-400" />
+                  <span className="text-sm font-bold text-slate-100">
+                    ตัวกรองคะแนนคุณภาพขั้นต่ำในการเข้าซื้อ (Min Buy Score Gate)
+                  </span>
+                </div>
+                <div className="px-3 py-1 rounded-full bg-emerald-950/70 border border-emerald-500/50 text-emerald-400 font-mono font-bold text-xs">
+                  {configForm.quantMinScore ?? 80} / 100 คะแนน
+                </div>
+              </div>
+
+              <div className="bg-[#111726] border border-slate-800/80 rounded-xl p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-200">
+                      คะแนนขั้นต่ำที่ยอมรับได้ (เกณฑ์แนะนำ &gt;= 75 คะแนน)
+                    </h4>
+                    <p className="text-[11px] text-slate-400 mt-1 max-w-xl leading-relaxed">
+                      บอทจะเข้าซื้อเฉพาะหุ้นที่มีคะแนนคุณภาพสัญญาณตั้งแต่ระดับนี้ขึ้นไปเท่านั้น เพื่อคัดเฉพาะหุ้นที่มีโมเมนตัมและแนวโน้มขาขึ้นแข็งแกร่ง ป้องกันการติดดอยจากสัญญาณอ่อน
+                    </p>
+                  </div>
+
+                  <div className="flex items-center space-x-2 shrink-0 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5">
+                    <input
+                      type="number"
+                      min="50"
+                      max="100"
+                      disabled={!isEditing}
+                      value={configForm.quantMinScore ?? 80}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          quantMinScore: Number(e.target.value),
+                        })
+                      }
+                      className="w-12 bg-transparent text-emerald-400 font-bold font-mono text-center focus:outline-hidden disabled:opacity-60"
+                    />
+                    <span className="text-slate-400 text-xs">คะแนน</span>
+                  </div>
+                </div>
+
+                {/* Slider */}
+                <div className="pt-2">
+                  <input
+                    type="range"
+                    min="50"
+                    max="95"
+                    step="1"
+                    disabled={!isEditing}
+                    value={configForm.quantMinScore ?? 80}
+                    onChange={(e) =>
+                      setConfigForm({
+                        ...configForm,
+                        quantMinScore: Number(e.target.value),
+                      })
+                    }
+                    className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-400 disabled:opacity-60"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400 font-medium mt-2">
+                    <span>50 (ผ่อนปรน)</span>
+                    <span className="text-emerald-400 font-semibold">75 (แนะนำ ⭐ คัดเกรด A)</span>
+                    <span className="text-amber-400">90 (เข้มงวดมาก)</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Strict Golden Cross & Anti-Extended Guards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div className="bg-[#111726] border border-slate-800/80 p-3 rounded-xl space-y-1.5">
+                  <label className="flex items-start space-x-2 text-slate-200 font-bold cursor-pointer text-xs">
+                    <input
+                      type="checkbox"
+                      disabled={!isEditing}
+                      checked={configForm.strictGoldenCrossOnly !== false}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          strictGoldenCrossOnly: e.target.checked,
+                        })
+                      }
+                      className="mt-0.5 rounded bg-slate-950 border-slate-700 text-emerald-500 focus:ring-0"
+                    />
+                    <div>
+                      <span className="text-emerald-400">หลัก CDC แท้จริง (Strict Golden Cross)</span>
+                      <p className="text-[11px] text-slate-400 font-normal mt-0.5">
+                        เข้าซื้อเฉพาะ 1–2 แท่งแรกหลังเกิด Golden Cross เท่านั้น ป้องกันการเข้าซื้อกลางเทรนด์หรือตอนที่ราคาขึ้นไปไกลแล้ว
+                      </p>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="bg-[#111726] border border-slate-800/80 p-3 rounded-xl space-y-1.5">
+                  <label className="flex items-start space-x-2 text-slate-200 font-bold cursor-pointer text-xs">
+                    <input
+                      type="checkbox"
+                      disabled={!isEditing}
+                      checked={configForm.skipExtendedPrice !== false}
+                      onChange={(e) =>
+                        setConfigForm({
+                          ...configForm,
+                          skipExtendedPrice: e.target.checked,
+                        })
+                      }
+                      className="mt-0.5 rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
+                    />
+                    <div>
+                      <span className="text-amber-400">ระบบกรองราคายืดตัว (Anti-Extended Guard)</span>
+                      <p className="text-[11px] text-slate-400 font-normal mt-0.5">
+                        ไม่เข้าซื้อหากราคาห่างจากฐาน 60 วันเกินเกณฑ์ (โซนราคายืดตัว) เพื่อป้องกันการไล่ราคายอดดอย
+                      </p>
+                    </div>
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -930,7 +1115,7 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
                       }}
                       className="rounded bg-slate-950 border-slate-700 text-blue-500 focus:ring-0"
                     />
-                    <span className="font-bold text-blue-400">โซนฟ้า (Buy Trigger - แท่งฟ้าแรก ⭐)</span>
+                    <span className="font-bold text-blue-400">โซนฟ้า (สัญญาณเตือนก่อนเขียว — โหมดเชิงรุก)</span>
                   </label>
                   <label className="flex items-center space-x-2 text-slate-300 cursor-pointer">
                     <input
@@ -945,7 +1130,7 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
                       }}
                       className="rounded bg-slate-950 border-slate-700 text-emerald-500 focus:ring-0"
                     />
-                    <span className="font-bold text-emerald-400">โซนเขียว (Green Run Trend ⭐)</span>
+                    <span className="font-bold text-emerald-400">โซนเขียว (เขียวซื้อ — ค่าเริ่มต้น ⭐)</span>
                   </label>
                 </div>
               </div>
@@ -981,7 +1166,7 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
                       }}
                       className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
                     />
-                    <span className="text-amber-400 font-bold">โซนเหลือง (Warning เตือนระวัง)</span>
+                    <span className="text-amber-400 font-bold">โซนเหลือง (ออกก่อนแดง — ตัวเลือกเสริม)</span>
                   </label>
                 </div>
               </div>
@@ -1008,10 +1193,11 @@ export const BotControlPanel: React.FC<BotControlPanelProps> = ({
           </div>
           <button
             onClick={onClearLogs}
-            className="text-slate-500 hover:text-slate-300 p-1.5 rounded-xl hover:bg-slate-800 transition cursor-pointer"
-            title="ล้างบันทึก"
+            className="flex items-center space-x-1.5 text-slate-400 hover:text-rose-300 px-3 py-1.5 rounded-xl bg-slate-950/80 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 transition cursor-pointer text-xs font-bold"
+            title="ล้างบันทึกกิจกรรมบอททั้งหมด"
           >
-            <Trash2 className="w-4 h-4" />
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>ล้างบันทึก</span>
           </button>
         </div>
 

@@ -13,3 +13,4 @@ data/
 # AI assistant / agent artifacts (not part of the trading bot)
 .agents/
 plan.md
+*.zip

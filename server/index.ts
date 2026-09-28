@@ -52,7 +52,7 @@ app.use(
 app.use('/api/', generalLimiter);
 app.use(express.json({ limit: '200kb' }));
 
-// Optional dashboard authentication (disabled unless DASHBOARD_TOKEN is set).
+// Dashboard authentication is mandatory in production; local development may omit the token.
 app.use('/api/', dashboardAuth);
 
 // ==================== STATE + ROUTE REGISTRATION ====================

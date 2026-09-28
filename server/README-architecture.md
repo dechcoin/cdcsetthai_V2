@@ -9,7 +9,7 @@ Previously a single 1,394-line `server.ts`; now a layered structure.
 server/
 ├── index.ts                       # Entry point ONLY: app + security middleware + routes + listen
 ├── middleware/
-│   ├── dashboardAuth.ts           # Optional DASHBOARD_TOKEN auth for /api/*
+│   ├── dashboardAuth.ts           # DASHBOARD_TOKEN required in production for /api/*
 │   └── rateLimiters.ts            # generalLimiter, orderLimiter (shared with routes)
 ├── repositories/
 │   └── stateRepository.ts         # ServerState shape + data/bot_state.json persistence
@@ -89,6 +89,8 @@ path (`dist/server.cjs`) is part of the contract — do not rename it.
 - `routes/bot.routes.ts` and `services/tradingEngine.ts` still duplicate the open/close
   position bookkeeping (PnL math, `ExecutedTrade` construction, Telegram wording). Extract a
   `services/paperTradingService.ts` to share it.
-- `/api/stock/balances` and `/api/stock/order` are still stubs (no real broker Open API call).
+- `/api/stock/depth`, `/api/stock/balances`, and `/api/stock/order` explicitly return HTTP 501 until real market-depth/broker adapters exist; they never return fabricated success/data.
+- Live bot mode and manual live orders are disabled. The trading engine fails closed to Paper mode.
+- In production, set `DASHBOARD_TOKEN`; set a stable `LIVE_KEYS_ENCRYPTION_KEY` (at least 32 characters) before saving broker or Telegram secrets. Secrets are AES-256-GCM encrypted at rest and are never stored in browser local storage.
 - `marketData.ts` holds its cache/backoff in module scope; if the process is ever scaled
   horizontally, that state must move to a shared store.
