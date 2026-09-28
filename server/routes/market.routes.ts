@@ -1,6 +1,6 @@
 import express from 'express';
 import { POPULAR_STOCKS } from '../../src/lib/stockApi';
-import { fetchQuotesCached } from '../services/marketData';
+import { fetchQuotesCached, fetchYahooChartRaw } from '../services/marketData';
 import { orderLimiter } from '../middleware/rateLimiters';
 import { addServerLog, getServerState, saveServerState } from '../repositories/stateRepository';
 import { sanitizeErrorMessage } from '../utils/validation';
@@ -52,27 +52,8 @@ const handleKlines = async (req: express.Request, res: express.Response) => {
       interval = '1wk';
     }
 
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=${interval}&period1=${from}&period2=${to}`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
-    });
-
-    if (!response.ok) {
-      return res.status(response.status).json({ s: 'error', error: 'Stock API request failed' });
-    }
-
-    const data = await response.json();
-    const result = data.chart?.result?.[0];
-    if (!result || !result.timestamp) {
-      return res.json({ s: 'no_data', t: [], o: [], h: [], l: [], c: [], v: [] });
-    }
-
-    const timestamps = result.timestamp;
-    const quote = result.indicators?.quote?.[0];
-    if (!quote) {
+    const chart = await fetchYahooChartRaw(yahooSymbol, interval, from, to);
+    if (!chart || chart.timestamps.length === 0) {
       return res.json({ s: 'no_data', t: [], o: [], h: [], l: [], c: [], v: [] });
     }
 
@@ -83,21 +64,21 @@ const handleKlines = async (req: express.Request, res: express.Response) => {
     let c: number[] = [];
     let v: number[] = [];
 
-    for (let i = 0; i < timestamps.length; i++) {
+    for (let i = 0; i < chart.timestamps.length; i++) {
       if (
-        quote.open?.[i] == null ||
-        quote.high?.[i] == null ||
-        quote.low?.[i] == null ||
-        quote.close?.[i] == null
+        chart.opens[i] == null ||
+        chart.highs[i] == null ||
+        chart.lows[i] == null ||
+        chart.closes[i] == null
       ) {
         continue;
       }
-      t.push(timestamps[i]);
-      o.push(Number(quote.open[i]));
-      h.push(Number(quote.high[i]));
-      l.push(Number(quote.low[i]));
-      c.push(Number(quote.close[i]));
-      v.push(Number(quote.volume?.[i] || 0));
+      t.push(chart.timestamps[i]);
+      o.push(Number(chart.opens[i]));
+      h.push(Number(chart.highs[i]));
+      l.push(Number(chart.lows[i]));
+      c.push(Number(chart.closes[i]));
+      v.push(Number(chart.volumes[i] || 0));
     }
 
     if (bucketSeconds > 0 && t.length > 0) {

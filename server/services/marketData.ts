@@ -128,7 +128,34 @@ export function stripFormingCandle(candles: KlineData[], interval: string): Klin
 }
 
 
-// ==================== YAHOO FINANCE CLIENT ====================
+// ==================== YAHOO FINANCE CLIENT (resilient + crumb-aware) ====================
+
+export const YAHOO_HEADERS: Record<string, string> = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': '*/*',
+  'Accept-Language': 'en-US,en;q=0.9,th;q=0.8',
+  'Origin': 'https://finance.yahoo.com',
+  'Referer': 'https://finance.yahoo.com/',
+  'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Site': 'same-site',
+};
+
+export function getYahooBaseHosts(): string[] {
+  const customProxy = process.env.YAHOO_PROXY_URL?.trim();
+  if (customProxy) {
+    const clean = customProxy.replace(/\/+$/, '');
+    return [clean, 'https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com'];
+  }
+  return [
+    'https://query1.finance.yahoo.com',
+    'https://query2.finance.yahoo.com',
+  ];
+}
 
 // แคชข้อมูลแท่งเทียน + backoff เพื่อไม่ให้ Yahoo Finance จำกัดอัตรา/แบน IP
 const klineCache = new Map<string, { data: KlineData[]; ts: number }>();
@@ -149,14 +176,175 @@ function klineCacheTTL(interval: string): number {
   return KLINE_CACHE_TTL_MS[interval] || 300000;
 }
 
+export interface YahooQuote {
+  symbol: string; // e.g. 'PTT' (no .BK suffix)
+  last: number;
+  changePercent: number;
+  volume: number;
+  dayHigh: number;
+  dayLow: number;
+}
+
+const QUOTE_CACHE_TTL_MS = 60_000; // 60s — tape polls every ~20s; the cache absorbs the rest
+const quoteCache = new Map<string, { data: Record<string, YahooQuote>; ts: number }>();
+const quoteInFlight = new Map<string, Promise<Record<string, YahooQuote>>>();
+
+interface YahooSession {
+  cookie: string;
+  crumb: string;
+  fetchedAt: number;
+}
+
+let yahooSession: YahooSession | null = null;
+const SESSION_TTL_MS = 30 * 60 * 1000;
+
+function extractCookies(res: Response): string {
+  try {
+    const setCookies = res.headers.getSetCookie?.() ?? [];
+    const single = res.headers.get('set-cookie');
+    const all = setCookies.length > 0 ? setCookies : single ? [single] : [];
+    return all
+      .map((c) => c.split(';')[0])
+      .filter(Boolean)
+      .join('; ');
+  } catch {
+    return '';
+  }
+}
+
+async function fetchYahooCrumb(): Promise<YahooSession | null> {
+  const hosts = getYahooBaseHosts();
+  let cookie = '';
+  try {
+    // 404 is expected here — the request is only used to collect Yahoo's `A3` cookie.
+    const fcRes = await fetch('https://fc.yahoo.com', {
+      headers: {
+        'User-Agent': YAHOO_HEADERS['User-Agent'],
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    cookie = extractCookies(fcRes);
+  } catch {
+    /* fallback to main site */
+  }
+
+  if (!cookie) {
+    try {
+      const mainRes = await fetch('https://finance.yahoo.com/quote/PTT.BK', {
+        headers: {
+          'User-Agent': YAHOO_HEADERS['User-Agent'],
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+      cookie = extractCookies(mainRes);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (!cookie) return null;
+
+  for (const host of hosts) {
+    try {
+      const crumbRes = await fetch(`${host}/v1/test/getcrumb`, {
+        headers: { ...YAHOO_HEADERS, Cookie: cookie },
+      });
+      if (crumbRes.ok) {
+        const crumb = (await crumbRes.text()).trim();
+        if (crumb && !crumb.includes('<html') && crumb.length < 50) {
+          return { cookie, crumb, fetchedAt: Date.now() };
+        }
+      }
+    } catch {
+      // try next host
+    }
+  }
+  return null;
+}
+
+export async function getYahooSession(force = false): Promise<YahooSession | null> {
+  if (!force && yahooSession && Date.now() - yahooSession.fetchedAt < SESSION_TTL_MS) {
+    return yahooSession;
+  }
+  const session = await fetchYahooCrumb();
+  if (session) yahooSession = session;
+  return session;
+}
+
+export interface RawChartResult {
+  timestamps: number[];
+  opens: (number | null)[];
+  highs: (number | null)[];
+  lows: (number | null)[];
+  closes: (number | null)[];
+  volumes: (number | null)[];
+}
+
+/**
+ * Shared, resilient raw chart fetcher trying hosts (query1, query2, or custom proxy),
+ * browser headers, and session crumb/cookie with automatic fallback.
+ */
+export async function fetchYahooChartRaw(
+  yahooSymbol: string,
+  interval: string,
+  from: number,
+  to: number
+): Promise<RawChartResult | null> {
+  const hosts = getYahooBaseHosts();
+  const session = await getYahooSession();
+  const crumbQuery = session?.crumb ? `&crumb=${encodeURIComponent(session.crumb)}` : '';
+  const headers: Record<string, string> = { ...YAHOO_HEADERS };
+  if (session?.cookie) {
+    headers['Cookie'] = session.cookie;
+  }
+
+  for (const host of hosts) {
+    const url = `${host}/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=${interval}&period1=${from}&period2=${to}${crumbQuery}`;
+    try {
+      const res = await fetch(url, { headers });
+      if (res.status === 401 || res.status === 403) {
+        yahooSession = null; // Session expired or rejected, invalidate
+      }
+      if (!res.ok) {
+        continue; // try next host
+      }
+
+      const data = await res.json();
+      const result = data?.chart?.result?.[0];
+      if (!result || !Array.isArray(result.timestamp) || result.timestamp.length === 0) {
+        continue;
+      }
+
+      const quote = result.indicators?.quote?.[0];
+      if (!quote) continue;
+
+      return {
+        timestamps: result.timestamp,
+        opens: quote.open || [],
+        highs: quote.high || [],
+        lows: quote.low || [],
+        closes: quote.close || [],
+        volumes: quote.volume || [],
+      };
+    } catch {
+      // network/fetch error, try next host
+    }
+  }
+
+  return null;
+}
+
 /** Fetches candles straight from Yahoo Finance (no cache) and applies backoff on failure. */
 export async function fetchKlinesDirect(symbol: string, interval: string, limit = 750): Promise<KlineData[]> {
   try {
     if (Date.now() < yahooBackoffUntil) return [];
     const isIndex = symbol.startsWith('^');
-    const rawClean = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const cleanSymbol = isIndex ? `^${rawClean}` : (rawClean || 'PTT');
-    const yahooSymbol = cleanSymbol.endsWith('.BK') ? cleanSymbol : `${cleanSymbol}.BK`;
+    const symbolWithoutIndex = isIndex ? symbol.slice(1) : symbol;
+    const baseSymbol = symbolWithoutIndex.replace(/\.BK$/i, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const cleanSymbol = isIndex ? `^${baseSymbol}` : (baseSymbol || 'PTT');
+    const yahooSymbol = `${cleanSymbol}.BK`;
 
     let yahooInterval = '1d';
     let step = 86400;
@@ -207,33 +395,21 @@ export async function fetchKlinesDirect(symbol: string, interval: string, limit 
     const to = Math.floor(Date.now() / 1000);
     const calendarFactor = (interval === '1d' || interval === '1w') ? 1.5 : 1;
     const from = to - Math.floor(limit * step * calendarFactor);
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=${yahooInterval}&period1=${from}&period2=${to}`;
 
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
-    });
-    if (!res.ok) {
-      yahooBackoffUntil = Date.now() + (res.status === 429 ? 60000 : 15000);
+    const chart = await fetchYahooChartRaw(yahooSymbol, yahooInterval, from, to);
+    if (!chart) {
+      yahooBackoffUntil = Date.now() + 15000;
       return [];
     }
-    const data = await res.json();
-    const result = data.chart?.result?.[0];
-    if (!result || !result.timestamp) return [];
-
-    const quote = result.indicators?.quote?.[0];
-    if (!quote) return [];
 
     const rawKlines: KlineData[] = [];
-    for (let i = 0; i < result.timestamp.length; i++) {
-      const t = result.timestamp[i];
-      const o = quote.open?.[i];
-      const h = quote.high?.[i];
-      const l = quote.low?.[i];
-      const c = quote.close?.[i];
-      const v = quote.volume?.[i] || 0;
+    for (let i = 0; i < chart.timestamps.length; i++) {
+      const t = chart.timestamps[i];
+      const o = chart.opens[i];
+      const h = chart.highs[i];
+      const l = chart.lows[i];
+      const c = chart.closes[i];
+      const v = chart.volumes[i] || 0;
 
       if (o == null || h == null || l == null || c == null) continue;
 
@@ -314,91 +490,30 @@ export async function fetchKlinesCached(symbol: string, interval: string, limit 
   return data;
 }
 
-// ==================== YAHOO QUOTES CLIENT (crumb-aware) ====================
-// Yahoo's v7/finance/quote now requires a session cookie + "crumb" (same flow the
-// yfinance library uses). v8/finance/spark is the crumb-free fallback but has no
-// volume / high / low fields.
-
-export interface YahooQuote {
-  symbol: string; // e.g. 'PTT' (no .BK suffix)
-  last: number;
-  changePercent: number;
-  volume: number;
-  dayHigh: number;
-  dayLow: number;
-}
-
-const YAHOO_QUOTE_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
-const QUOTE_CACHE_TTL_MS = 60_000; // 60s — tape polls every ~20s; the cache absorbs the rest
-const quoteCache = new Map<string, { data: Record<string, YahooQuote>; ts: number }>();
-const quoteInFlight = new Map<string, Promise<Record<string, YahooQuote>>>();
-
-interface YahooSession {
-  cookie: string;
-  crumb: string;
-  fetchedAt: number;
-}
-
-let yahooSession: YahooSession | null = null;
-const SESSION_TTL_MS = 30 * 60 * 1000;
-
-function extractCookies(res: Response): string {
-  try {
-    const setCookies = res.headers.getSetCookie?.() ?? [];
-    const single = res.headers.get('set-cookie');
-    const all = setCookies.length > 0 ? setCookies : single ? [single] : [];
-    return all
-      .map((c) => c.split(';')[0])
-      .filter(Boolean)
-      .join('; ');
-  } catch {
-    return '';
-  }
-}
-
-async function fetchYahooCrumb(): Promise<YahooSession | null> {
-  try {
-    // 404 is expected here — the request is only used to collect Yahoo's `A3` cookie.
-    const fcRes = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': YAHOO_QUOTE_UA } });
-    const cookie = extractCookies(fcRes);
-    if (!cookie) return null;
-
-    const crumbRes = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
-      headers: { 'User-Agent': YAHOO_QUOTE_UA, Cookie: cookie },
-    });
-    if (!crumbRes.ok) return null;
-    const crumb = (await crumbRes.text()).trim();
-    if (!crumb) return null;
-    return { cookie, crumb, fetchedAt: Date.now() };
-  } catch {
-    return null;
-  }
-}
-
-async function getYahooSession(force = false): Promise<YahooSession | null> {
-  if (!force && yahooSession && Date.now() - yahooSession.fetchedAt < SESSION_TTL_MS) {
-    return yahooSession;
-  }
-  const session = await fetchYahooCrumb();
-  if (session) yahooSession = session;
-  return session;
-}
-
 async function fetchQuotesV7(symbols: string[]): Promise<Record<string, YahooQuote>> {
   const result: Record<string, YahooQuote> = {};
   let session = await getYahooSession();
   if (!session) return result;
 
-  const doFetch = (s: YahooSession) => {
-    const yahooSymbols = symbols.map((x) => `${x}.BK`).join(',');
-    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSymbols}&crumb=${encodeURIComponent(s.crumb)}`;
-    return fetch(url, { headers: { 'User-Agent': YAHOO_QUOTE_UA, Cookie: s.cookie } });
+  const hosts = getYahooBaseHosts();
+  const yahooSymbols = symbols.map((x) => `${x}.BK`).join(',');
+
+  const doFetch = async (s: YahooSession) => {
+    for (const host of hosts) {
+      const url = `${host}/v7/finance/quote?symbols=${yahooSymbols}&crumb=${encodeURIComponent(s.crumb)}`;
+      try {
+        const res = await fetch(url, { headers: { ...YAHOO_HEADERS, Cookie: s.cookie } });
+        if (res.ok) return res;
+        if (res.status === 401 || res.status === 403) return res;
+      } catch {
+        // try next host
+      }
+    }
+    return null;
   };
 
   let res = await doFetch(session);
-  if (res.status === 401 || res.status === 403) {
+  if (res && (res.status === 401 || res.status === 403)) {
     // crumb expired — refresh once and retry
     const fresh = await getYahooSession(true);
     if (fresh) {
@@ -406,7 +521,7 @@ async function fetchQuotesV7(symbols: string[]): Promise<Record<string, YahooQuo
       res = await doFetch(session);
     }
   }
-  if (!res.ok) return result;
+  if (!res || !res.ok) return result;
 
   const data = await res.json();
   const quotes = data?.quoteResponse?.result || [];
@@ -430,28 +545,34 @@ async function fetchQuotesV7(symbols: string[]): Promise<Record<string, YahooQuo
 async function fetchQuotesSpark(symbols: string[]): Promise<Record<string, YahooQuote>> {
   const result: Record<string, YahooQuote> = {};
   const batchSize = 20; // spark rejects >~20 symbols per request
+  const hosts = getYahooBaseHosts();
+
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
     const yahooSymbols = batch.map((x) => `${x}.BK`).join(',');
-    const url = `https://query1.finance.yahoo.com/v8/finance/spark?symbols=${yahooSymbols}&range=5d&interval=1d`;
-    try {
-      const res = await fetch(url, { headers: { 'User-Agent': YAHOO_QUOTE_UA } });
-      if (!res.ok) continue;
-      const data = await res.json();
-      for (const [key, spark] of Object.entries(data)) {
-        const rawSym = key.replace('.BK', '').toUpperCase();
-        const s = spark as any;
-        const closes: number[] = Array.isArray(s?.close) ? s.close.map(Number) : [];
-        const last = Number(s?.fulldayPrice) || (closes.length > 0 ? closes[closes.length - 1] : 0);
-        if (last <= 0) continue;
-        let changePercent = Number(s?.fulldayChangePercent) || 0;
-        if (!changePercent && closes.length >= 2 && closes[closes.length - 2] > 0) {
-          changePercent = ((last - closes[closes.length - 2]) / closes[closes.length - 2]) * 100;
+
+    for (const host of hosts) {
+      const url = `${host}/v8/finance/spark?symbols=${yahooSymbols}&range=5d&interval=1d`;
+      try {
+        const res = await fetch(url, { headers: YAHOO_HEADERS });
+        if (!res.ok) continue;
+        const data = await res.json();
+        for (const [key, spark] of Object.entries(data)) {
+          const rawSym = key.replace('.BK', '').toUpperCase();
+          const s = spark as any;
+          const closes: number[] = Array.isArray(s?.close) ? s.close.map(Number) : [];
+          const last = Number(s?.fulldayPrice) || (closes.length > 0 ? closes[closes.length - 1] : 0);
+          if (last <= 0) continue;
+          let changePercent = Number(s?.fulldayChangePercent) || 0;
+          if (!changePercent && closes.length >= 2 && closes[closes.length - 2] > 0) {
+            changePercent = ((last - closes[closes.length - 2]) / closes[closes.length - 2]) * 100;
+          }
+          result[rawSym] = { symbol: rawSym, last, changePercent, volume: 0, dayHigh: last, dayLow: last };
         }
-        result[rawSym] = { symbol: rawSym, last, changePercent, volume: 0, dayHigh: last, dayLow: last };
+        break; // Batch succeeded, don't need next host
+      } catch {
+        // try next host
       }
-    } catch {
-      // skip a failed batch and keep going
     }
   }
   return result;
