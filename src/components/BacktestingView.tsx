@@ -21,8 +21,9 @@ import {
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
+  Legend,
 } from 'recharts';
-import { Play, TrendingUp, Award, AlertTriangle, ArrowUpRight, ArrowDownRight, RefreshCw, BarChart2, Layers, Loader2 } from 'lucide-react';
+import { Play, TrendingUp, Award, AlertTriangle, ArrowUpRight, ArrowDownRight, RefreshCw, BarChart2, Layers, Loader2, ShieldCheck } from 'lucide-react';
 
 type MarketUniverse = 'ALL_MARKET' | 'SET50' | 'SET100' | 'SSET' | 'MAI' | 'WATCHLIST';
 
@@ -39,6 +40,7 @@ export const BacktestingView: React.FC = () => {
   const [otherFeePercent, setOtherFeePercent] = useState<number | string>(0);
   const [slippagePercent, setSlippagePercent] = useState<number | string>(0.1);
   const [minNotionalThb, setMinNotionalThb] = useState<number | string>(0);
+  const [benchmarkSymbol, setBenchmarkSymbol] = useState<'TDEX' | 'BSET100' | 'NONE'>('TDEX');
 
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
@@ -58,6 +60,16 @@ export const BacktestingView: React.FC = () => {
   const runBacktest = async () => {
     setIsLoading(true);
     try {
+      let benchmarkCandles: KlineData[] = [];
+      if (benchmarkSymbol !== 'NONE') {
+        try {
+          const rawBenchmark = await fetchStockKlines(benchmarkSymbol, timeframe, candleCount);
+          benchmarkCandles = stripFormingCandle(rawBenchmark, timeframe);
+        } catch (e) {
+          console.warn('Failed to fetch benchmark candles for', benchmarkSymbol, e);
+        }
+      }
+
       const rawCandles = await fetchStockKlines(symbol, timeframe, candleCount);
       const closedCandles = stripFormingCandle(rawCandles, timeframe);
       const backtestResult = runBacktestSimulation(closedCandles, {
@@ -72,6 +84,7 @@ export const BacktestingView: React.FC = () => {
         otherFeePercent: Number(otherFeePercent) || 0,
         slippagePercent: Number(slippagePercent) || 0,
         minNotionalThb: Number(minNotionalThb) || 0,
+        benchmarkCandles,
       });
 
       if (!backtestResult) {
@@ -121,6 +134,16 @@ export const BacktestingView: React.FC = () => {
     let completed = 0;
 
     try {
+      let benchmarkCandles: KlineData[] = [];
+      if (benchmarkSymbol !== 'NONE') {
+        try {
+          const rawBenchmark = await fetchStockKlines(benchmarkSymbol, timeframe, candleCount);
+          benchmarkCandles = stripFormingCandle(rawBenchmark, timeframe);
+        } catch (e) {
+          console.warn('Failed to fetch benchmark candles for', benchmarkSymbol, e);
+        }
+      }
+
       // Parallel batching (chunks of 4) to match the scanner's rate profile
       const chunkSize = 4;
       for (let i = 0; i < universe.length; i += chunkSize) {
@@ -142,6 +165,7 @@ export const BacktestingView: React.FC = () => {
                 otherFeePercent: Number(otherFeePercent) || 0,
                 slippagePercent: Number(slippagePercent) || 0,
                 minNotionalThb: Number(minNotionalThb) || 0,
+                benchmarkCandles,
               });
             } catch (err) {
               console.error(`Backtest failed for ${sym}:`, err);
@@ -391,6 +415,20 @@ export const BacktestingView: React.FC = () => {
 
           {/* Direction Mode (Locked for Spot) */}
 
+          {/* Benchmark Selection */}
+          <div>
+            <label className="text-slate-300 font-medium block mb-1">Benchmark ตลาด (ดัชนีชี้วัด)</label>
+            <select
+              value={benchmarkSymbol}
+              onChange={(e) => setBenchmarkSymbol(e.target.value as any)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-amber-400 font-bold font-mono focus:border-amber-500"
+            >
+              <option value="TDEX">TDEX (SET50 ETF - Benchmark หุ้นไทย ⭐)</option>
+              <option value="BSET100">BSET100 (SET100 ETF)</option>
+              <option value="NONE">ไม่เปรียบเทียบ Benchmark</option>
+            </select>
+          </div>
+
           {/* Buy Trigger Zone */}
           <div>
             <label className="text-slate-300 font-medium block mb-1">เงื่อนไขเข้าซื้อ Long</label>
@@ -589,7 +627,7 @@ export const BacktestingView: React.FC = () => {
       {mode === 'SINGLE' && result && (
         <div className="space-y-6">
           {/* Performance Summary Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
             {/* Total Return Card */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1">
               <span className="text-[10px] text-slate-400 block font-medium">กำไรสุทธิ CDC Bot</span>
@@ -606,9 +644,32 @@ export const BacktestingView: React.FC = () => {
               </span>
             </div>
 
-            {/* Buy & Hold Benchmark Return */}
+            {/* Benchmark Return Card */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1">
-              <span className="text-[10px] text-slate-400 block font-medium">Buy &amp; Hold (ราคาปิดเท่านั้น)</span>
+              <span className="text-[10px] text-slate-400 block font-medium">Benchmark ({benchmarkSymbol})</span>
+              <div
+                className={`text-lg font-extrabold font-mono ${
+                  result.benchmarkReturnPercent !== null && result.benchmarkReturnPercent >= 0
+                    ? 'text-amber-400'
+                    : result.benchmarkReturnPercent !== null
+                    ? 'text-rose-400'
+                    : 'text-slate-500'
+                }`}
+              >
+                {result.benchmarkReturnPercent !== null
+                  ? `${result.benchmarkReturnPercent >= 0 ? '+' : ''}${result.benchmarkReturnPercent}%`
+                  : '—'}
+              </div>
+              <span className="text-[10px] text-slate-500 block">
+                {result.excessReturnPercent !== null
+                  ? `Alpha: ${result.excessReturnPercent >= 0 ? '+' : ''}${result.excessReturnPercent}%`
+                  : 'ดัชนีตลาดหุ้นไทย'}
+              </span>
+            </div>
+
+            {/* Buy & Hold Stock Return */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1">
+              <span className="text-[10px] text-slate-400 block font-medium">Buy &amp; Hold ({result.symbol})</span>
               <div
                 className={`text-lg font-extrabold font-mono ${
                   result.buyAndHoldReturnPercent >= 0 ? 'text-cyan-400' : 'text-rose-400'
@@ -617,7 +678,7 @@ export const BacktestingView: React.FC = () => {
                 {result.buyAndHoldReturnPercent >= 0 ? '+' : ''}
                 {result.buyAndHoldReturnPercent}%
               </div>
-              <span className="text-[10px] text-slate-500 block">ยังไม่รวมปันผล; ไม่ใช่ SET TRI</span>
+              <span className="text-[10px] text-slate-500 block">ซื้อและถือราคาปิด</span>
             </div>
 
             {/* Win Rate */}
@@ -692,22 +753,37 @@ export const BacktestingView: React.FC = () => {
 
           {/* Equity Chart */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 className="text-sm font-bold text-white flex items-center space-x-2">
                 <BarChart2 className="w-4 h-4 text-emerald-400" />
-                <span>กราฟการเติบโตของพอร์ต (Portfolio Equity Curve)</span>
+                <span>กราฟเปรียบเทียบพอร์ต vs Benchmark (Portfolio Equity vs Benchmark)</span>
               </h4>
-              <span className="text-xs text-slate-400 font-mono">
-                เงินทุนสุดท้าย: <strong className="text-emerald-400">฿{result.finalCapital.toLocaleString()} THB</strong>
-              </span>
+              <div className="flex items-center space-x-3 text-xs font-mono">
+                <span className="text-slate-400">
+                  พอร์ตบอท: <strong className="text-emerald-400">฿{result.finalCapital.toLocaleString()}</strong>
+                </span>
+                {result.excessReturnPercent !== null && (
+                  <span className={`px-2 py-0.5 rounded font-bold ${
+                    result.excessReturnPercent >= 0 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'
+                  }`}>
+                    Alpha: {result.excessReturnPercent >= 0 ? '+' : ''}{result.excessReturnPercent}%
+                  </span>
+                )}
+              </div>
             </div>
-            <div className="h-64 w-full">
+            <div className="h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={result.equityCurve}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                   <XAxis dataKey="dateStr" stroke="#64748b" tick={{ fontSize: 10 }} />
-                  <YAxis stroke="#64748b" tick={{ fontSize: 10 }} domain={['auto', 'auto']} />
+                  <YAxis
+                    stroke="#64748b"
+                    tick={{ fontSize: 10 }}
+                    domain={['auto', 'auto']}
+                    tickFormatter={(v) => `฿${(v / 1000).toFixed(0)}k`}
+                  />
                   <Tooltip
+                    formatter={(val: any, name: any) => [`฿${Number(val).toLocaleString()} THB`, name]}
                     contentStyle={{
                       backgroundColor: '#0f172a',
                       borderColor: '#334155',
@@ -715,13 +791,34 @@ export const BacktestingView: React.FC = () => {
                       fontSize: '12px',
                     }}
                   />
+                  <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }} />
                   <Line
                     type="monotone"
                     dataKey="equity"
                     stroke="#10b981"
-                    strokeWidth={2}
+                    strokeWidth={2.5}
                     dot={false}
-                    name="พอร์ต CDC Bot"
+                    name={`พอร์ต CDC Bot (${result.totalReturnPercent >= 0 ? '+' : ''}${result.totalReturnPercent}%)`}
+                  />
+                  {result.equityCurve.some((p) => p.benchmarkEquity !== undefined) && (
+                    <Line
+                      type="monotone"
+                      dataKey="benchmarkEquity"
+                      stroke="#f59e0b"
+                      strokeWidth={1.75}
+                      strokeDasharray="4 4"
+                      dot={false}
+                      name={`Benchmark ตลาด (${benchmarkSymbol}) (${result.benchmarkReturnPercent !== null && result.benchmarkReturnPercent >= 0 ? '+' : ''}${result.benchmarkReturnPercent ?? 0}%)`}
+                    />
+                  )}
+                  <Line
+                    type="monotone"
+                    dataKey="stockBuyAndHoldEquity"
+                    stroke="#818cf8"
+                    strokeWidth={1.25}
+                    strokeDasharray="2 2"
+                    dot={false}
+                    name={`ซื้อและถือ ${result.symbol} (${result.buyAndHoldReturnPercent >= 0 ? '+' : ''}${result.buyAndHoldReturnPercent}%)`}
                   />
                 </LineChart>
               </ResponsiveContainer>

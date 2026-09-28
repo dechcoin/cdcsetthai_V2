@@ -15,13 +15,12 @@ export const marketRouter = express.Router();
 
 const handleKlines = async (req: express.Request, res: express.Response) => {
   try {
-    let symbol = (req.query.symbol as string) || 'PTT';
-    symbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'PTT';
-    const resolution = String(req.query.resolution || '1D');
-    const from = parseInt(String(req.query.from || '0'), 10);
-    const to = parseInt(String(req.query.to || '0'), 10);
-
-    const yahooSymbol = symbol.endsWith('.BK') ? symbol : `${symbol}.BK`;
+    const rawSymbol = String(req.query.symbol || 'PTT').trim();
+    const isIndex = rawSymbol.startsWith('^');
+    const symbolWithoutIndex = isIndex ? rawSymbol.slice(1) : rawSymbol;
+    const baseSymbol = symbolWithoutIndex.replace(/\.BK$/i, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const cleanSymbol = isIndex ? `^${baseSymbol}` : (baseSymbol || 'PTT');
+    const yahooSymbol = `${cleanSymbol}.BK`;
     let interval = '1d';
     let bucketSeconds = 0;
 
@@ -43,7 +42,7 @@ const handleKlines = async (req: express.Request, res: express.Response) => {
       interval = '1wk';
     }
 
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=${interval}&period1=${from}&period2=${to}`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=${interval}&period1=${from}&period2=${to}`;
     const response = await fetch(url, {
       headers: {
         'User-Agent':

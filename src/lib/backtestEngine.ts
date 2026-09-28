@@ -119,7 +119,46 @@ export function runBacktestSimulation(
   let maxOrderToAdvPercent: number | null = null;
   let tradeId = 1;
   const trades: BacktestTrade[] = [];
-  const equityCurve: { time: number; equity: number; price: number; dateStr: string }[] = [];
+  const equityCurve: {
+    time: number;
+    equity: number;
+    price: number;
+    dateStr: string;
+    benchmarkEquity?: number;
+    stockBuyAndHoldEquity?: number;
+  }[] = [];
+
+  const firstPrice = cdcCandles[0].close;
+
+  // Build benchmark lookup by daily date key
+  const benchmarkByDay = new Map<string, number>();
+  if (params.benchmarkCandles && params.benchmarkCandles.length > 0) {
+    for (const c of params.benchmarkCandles) {
+      if (Number.isFinite(c.time) && Number.isFinite(c.close) && c.close > 0) {
+        const key = new Date(c.time).toISOString().slice(0, 10);
+        benchmarkByDay.set(key, c.close);
+      }
+    }
+  }
+
+  let benchmarkStartPrice: number | null = null;
+  if (params.benchmarkCandles && params.benchmarkCandles.length > 0) {
+    const firstDateKey = new Date(cdcCandles[0].time).toISOString().slice(0, 10);
+    benchmarkStartPrice = benchmarkByDay.get(firstDateKey) ?? null;
+    if (benchmarkStartPrice === null) {
+      const firstTime = cdcCandles[0].time;
+      for (const c of params.benchmarkCandles) {
+        if (c.time <= firstTime && c.close > 0) {
+          benchmarkStartPrice = c.close;
+        }
+      }
+      if (benchmarkStartPrice === null) {
+        benchmarkStartPrice = params.benchmarkCandles[0].close;
+      }
+    }
+  }
+
+  let lastBenchmarkClose: number | null = benchmarkStartPrice;
 
   const recordEquity = (time: number, close: number) => {
     const liquidationPrice = shares > 0 ? executionPrice(close, 'SELL', slippagePercent) : close;
@@ -127,11 +166,26 @@ export function runBacktestSimulation(
       ? tradingCosts(shares * liquidationPrice, feePercent, vatOnCommissionPercent, otherFeePercent).total
       : 0;
     const equity = cash + shares * liquidationPrice - liquidationCost;
+
+    const dayKey = new Date(time).toISOString().slice(0, 10);
+    const benchmarkClose = benchmarkByDay.get(dayKey);
+    if (benchmarkClose) {
+      lastBenchmarkClose = benchmarkClose;
+    }
+
+    let benchmarkEquity: number | undefined = undefined;
+    if (benchmarkStartPrice && benchmarkStartPrice > 0 && lastBenchmarkClose && lastBenchmarkClose > 0) {
+      benchmarkEquity = Number((params.initialCapital * (lastBenchmarkClose / benchmarkStartPrice)).toFixed(2));
+    }
+    const stockBuyAndHoldEquity = Number((params.initialCapital * (close / firstPrice)).toFixed(2));
+
     equityCurve.push({
       time,
       equity: Number(equity.toFixed(2)),
       price: close,
       dateStr: new Date(time).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }),
+      benchmarkEquity,
+      stockBuyAndHoldEquity,
     });
   };
 
@@ -266,7 +320,6 @@ export function runBacktestSimulation(
   }
 
   const finalCapital = cash;
-  const firstPrice = cdcCandles[0].close;
   const lastPrice = cdcCandles[cdcCandles.length - 1].close;
   const winningTrades = trades.filter((trade) => trade.pnlUsdt > 0).length;
   const losingTrades = trades.filter((trade) => trade.pnlUsdt < 0).length;

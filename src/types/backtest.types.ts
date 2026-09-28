@@ -71,5 +71,12 @@ export interface BacktestResult {
     ninetyFifthPercentileMaxDrawdownPercent: number;
   } | null;
   trades: BacktestTrade[];
-  equityCurve: { time: number; equity: number; price: number; dateStr: string }[];
+  equityCurve: {
+    time: number;
+    equity: number;
+    price: number;
+    dateStr: string;
+    benchmarkEquity?: number;
+    stockBuyAndHoldEquity?: number;
+  }[];
 }

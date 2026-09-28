@@ -153,7 +153,9 @@ function klineCacheTTL(interval: string): number {
 export async function fetchKlinesDirect(symbol: string, interval: string, limit = 750): Promise<KlineData[]> {
   try {
     if (Date.now() < yahooBackoffUntil) return [];
-    let cleanSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'PTT';
+    const isIndex = symbol.startsWith('^');
+    const rawClean = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const cleanSymbol = isIndex ? `^${rawClean}` : (rawClean || 'PTT');
     const yahooSymbol = cleanSymbol.endsWith('.BK') ? cleanSymbol : `${cleanSymbol}.BK`;
 
     let yahooInterval = '1d';
@@ -205,7 +207,7 @@ export async function fetchKlinesDirect(symbol: string, interval: string, limit 
     const to = Math.floor(Date.now() / 1000);
     const calendarFactor = (interval === '1d' || interval === '1w') ? 1.5 : 1;
     const from = to - Math.floor(limit * step * calendarFactor);
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=${yahooInterval}&period1=${from}&period2=${to}`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=${yahooInterval}&period1=${from}&period2=${to}`;
 
     const res = await fetch(url, {
       headers: {
