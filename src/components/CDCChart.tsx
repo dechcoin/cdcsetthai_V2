@@ -50,6 +50,7 @@ interface CDCChartProps {
   onBotTimeframeChange?: (newBotTimeframe: Timeframe) => void;
   onRefresh: () => void;
   isLoading: boolean;
+  errorMessage?: string | null;
 }
 
 const TIMEFRAMES: { value: Timeframe; label: string }[] = [
@@ -75,6 +76,7 @@ export const CDCChart: React.FC<CDCChartProps> = ({
   onBotTimeframeChange,
   onRefresh,
   isLoading,
+  errorMessage,
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -1081,6 +1083,16 @@ export const CDCChart: React.FC<CDCChartProps> = ({
       <div className="relative w-full min-w-0 h-[min(420px,55vh)] min-h-[340px] sm:h-[min(520px,70vh)] bg-[#131722] touch-pan-y">
         {/* Lightweight Charts Canvas Container */}
         <div ref={chartContainerRef} className="w-full h-full touch-pan-y" />
+
+        {candles.length === 0 && errorMessage && !isLoading && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center p-4 pointer-events-none">
+            <div className="max-w-lg rounded-xl border border-amber-500/40 bg-slate-950/95 p-4 text-center shadow-xl">
+              <p className="text-sm font-bold text-amber-300">ดึงแท่งเทียนไม่สำเร็จ</p>
+              <p className="mt-1 text-xs text-slate-300">{errorMessage}</p>
+              <p className="mt-2 text-[11px] text-slate-400">ตั้งค่า DASHBOARD_TOKEN บน Host แล้วกรอกรหัสเดียวกันที่ การตั้งค่า → Security</p>
+            </div>
+          </div>
+        )}
 
         {/* Overlay Canvas for CDC Action Zone Ribbon Cloud */}
         <canvas

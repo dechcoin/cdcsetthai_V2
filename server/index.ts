@@ -83,21 +83,20 @@ if (RENDER_APP_URL) {
 // ==================== VITE & SERVER LAUNCH ====================
 
 async function startServer() {
-  const possibleDistDirs = [
-    __dirname,
-    path.join(process.cwd(), 'dist'),
-    path.join(__dirname, '..', 'dist'),
-    path.join(__dirname, 'dist'),
-  ];
-  const distPath = possibleDistDirs.find((d) => fs.existsSync(path.join(d, 'index.html')));
+  // `npm run dev` executes this file as ESM, where Node does not define
+  // `__dirname`. The deployed bundle is CommonJS (`dist/server.cjs`), so detect
+  // that entry explicitly and resolve the frontend build from the app root.
+  const distPath = path.resolve(process.cwd(), 'dist');
+  const isBundledEntry = path.basename(process.argv[1] || '') === 'server.cjs';
+  const shouldUseVite = process.env.NODE_ENV !== 'production' && !isBundledEntry;
 
-  if (!distPath && process.env.NODE_ENV !== 'production') {
+  if (shouldUseVite) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else if (distPath) {
+  } else if (fs.existsSync(path.join(distPath, 'index.html'))) {
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

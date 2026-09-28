@@ -76,6 +76,7 @@ export default function App() {
     cpallPrice,
     currentPriceInfo,
     isLoadingCandles,
+    candleError,
     tickerStatus,
     loadCandles,
     loadTickers,
@@ -338,6 +339,7 @@ export default function App() {
               }}
               onRefresh={loadCandles}
               isLoading={isLoadingCandles}
+              errorMessage={candleError}
             />
 
             <BotControlPanel

@@ -47,6 +47,7 @@ export interface UseMarketDataResult {
   /** Latest close of `symbol`, used as the live price for manual orders. */
   currentPriceInfo: { symbol: string; price: number };
   isLoadingCandles: boolean;
+  candleError: string | null;
   /** Ticker-tape fetch state so the header can show an error instead of loading forever. */
   tickerStatus: 'loading' | 'ready' | 'error';
   /** Manual refresh (e.g. the CDCChart refresh button). */
@@ -78,6 +79,11 @@ export function useMarketData({
   const candles = candleState.identity === chartIdentity ? candleState.data : [];
   const [botCandles, setBotCandles] = useState<KlineData[]>([]);
   const [isLoadingCandles, setIsLoadingCandles] = useState(false);
+  const [candleErrorState, setCandleErrorState] = useState<{ identity: string; message: string | null }>({
+    identity: chartIdentity,
+    message: null,
+  });
+  const candleError = candleErrorState.identity === chartIdentity ? candleErrorState.message : null;
   const [pttPrice, setPttPrice] = useState<number | undefined>(undefined);
   const [cpallPrice, setCpallPrice] = useState<number | undefined>(undefined);
   const [allTickers, setAllTickers] = useState<StockTicker24h[]>([]);
@@ -96,10 +102,18 @@ export function useMarketData({
 
     const requestId = ++candleRequestIdRef.current;
     setIsLoadingCandles(true);
+    setCandleErrorState({ identity: chartIdentity, message: null });
     try {
       // A. Load Chart Viewing Candles (on chartTimeframe)
       const chartRaw = await fetchStockKlines(symbol, chartTimeframe, 750);
       if (requestId !== candleRequestIdRef.current || activeRequestIdentityRef.current !== requestIdentity) return;
+
+      if (chartRaw.length === 0) {
+        setCandleErrorState({
+          identity: chartIdentity,
+          message: 'เซิร์ฟเวอร์ไม่ส่งแท่งเทียนกลับมา ตรวจ DASHBOARD_TOKEN และแหล่งข้อมูลหุ้นบน Host',
+        });
+      }
 
       const chartCdc = calculateCDCActionZone(chartRaw, fastEmaPeriod, slowEmaPeriod);
       setCandleState({ identity: chartIdentity, data: chartCdc });
@@ -121,6 +135,10 @@ export function useMarketData({
     } catch (err) {
       if (requestId === candleRequestIdRef.current && activeRequestIdentityRef.current === requestIdentity) {
         console.error('Error loading klines:', err);
+        setCandleErrorState({
+          identity: chartIdentity,
+          message: err instanceof Error ? err.message : 'ดึงข้อมูลกราฟหุ้นไม่สำเร็จ',
+        });
       }
     } finally {
       if (requestId === candleRequestIdRef.current && activeRequestIdentityRef.current === requestIdentity) {
@@ -186,6 +204,7 @@ export function useMarketData({
     cpallPrice,
     currentPriceInfo,
     isLoadingCandles,
+    candleError,
     tickerStatus,
     loadCandles,
     loadTickers,

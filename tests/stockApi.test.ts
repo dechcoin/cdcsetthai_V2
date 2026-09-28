@@ -32,3 +32,39 @@ test('URL-encodes the preserved caret when requesting Yahoo SET index candles', 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('reports a missing production dashboard token instead of returning an empty candle list', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    error: 'Dashboard API is locked: configure DASHBOARD_TOKEN on the server.',
+  }), {
+    status: 503,
+    headers: { 'content-type': 'application/json' },
+  });
+
+  try {
+    await assert.rejects(
+      fetchStockKlines('PTT', '1d', 100),
+      /เซิร์ฟเวอร์ยังไม่ได้ตั้งค่า DASHBOARD_TOKEN/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('reports an invalid dashboard token clearly', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    status: 401,
+    headers: { 'content-type': 'application/json' },
+  });
+
+  try {
+    await assert.rejects(
+      fetchStockKlines('PTT', '1d', 100),
+      /DASHBOARD_TOKEN ไม่ถูกต้อง/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

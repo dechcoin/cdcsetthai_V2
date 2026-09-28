@@ -136,6 +136,7 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
   const [isScanning, setIsScanning] = useState(false);
   const [scanResults, setScanResults] = useState<ScannerStockResult[]>([]);
   const [scanProgress, setScanProgress] = useState(0);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   // Determine active symbol list based on mode
   const activeSymbolList = useMemo(() => {
@@ -157,7 +158,10 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
 
     setIsScanning(true);
     setScanProgress(0);
+    setScanError(null);
     const results: ScannerStockResult[] = [];
+    let failedCount = 0;
+    let firstScanError: string | null = null;
 
     try {
       const tickers = await fetchStockTicker24h();
@@ -173,6 +177,11 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
           chunk.map(async (sym) => {
             try {
               const rawCandles = await fetchStockKlines(sym, timeframe, 120);
+              if (rawCandles.length === 0) {
+                failedCount++;
+                if (!firstScanError) firstScanError = `API ไม่ส่งแท่งเทียนให้ ${sym}; ตรวจ DASHBOARD_TOKEN และแหล่งข้อมูลหุ้นบน Host`;
+                return;
+              }
               const timeframeCandles = stripFormingCandle(rawCandles, timeframe);
               const cdcCandles = calculateCDCActionZone(timeframeCandles, 12, 26);
 
@@ -244,6 +253,8 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
               }
             } catch (e) {
               console.warn(`Failed to scan ${sym}:`, e);
+              failedCount++;
+              if (!firstScanError && e instanceof Error) firstScanError = e.message;
             } finally {
               completed++;
               setScanProgress(Math.round((completed / symbolsToScan.length) * 100));
@@ -253,8 +264,12 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
       }
 
       setScanResults(results);
+      if (results.length === 0 && failedCount > 0) {
+        setScanError(firstScanError || `ดึงข้อมูลไม่สำเร็จ ${failedCount} หุ้น ตรวจสอบ API และ DASHBOARD_TOKEN`);
+      }
     } catch (err) {
       console.error('Scan error:', err);
+      setScanError(err instanceof Error ? err.message : 'ดึงข้อมูลหุ้นเพื่อสแกนไม่สำเร็จ');
     } finally {
       setIsScanning(false);
     }
@@ -1137,9 +1152,11 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({
           {filteredAndSortedStocks.length === 0 && !isScanning ? (
             <div className="col-span-full bg-slate-900 border border-slate-800 rounded-3xl p-14 text-center text-slate-400 space-y-3 shadow-xl">
               <TrendingUp className="w-10 h-10 mx-auto text-slate-600" />
-              <p className="text-sm font-bold text-slate-300">ไม่พบหุ้นที่ตรงกับเงื่อนไขการกรอง</p>
+              <p className={`text-sm font-bold ${scanError ? 'text-amber-300' : 'text-slate-300'}`}>
+                {scanError ? 'สแกนข้อมูลหุ้นไม่สำเร็จ' : 'ไม่พบหุ้นที่ตรงกับเงื่อนไขการกรอง'}
+              </p>
               <p className="text-xs text-slate-500">
-                ลองคลิกเลือกแถบป้ายกรองสัญญาณอื่น หรือเปลี่ยนคำค้นหา
+                {scanError || 'ลองคลิกเลือกแถบป้ายกรองสัญญาณอื่น หรือเปลี่ยนคำค้นหา'}
               </p>
             </div>
           ) : (

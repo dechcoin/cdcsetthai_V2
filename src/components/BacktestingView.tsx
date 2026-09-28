@@ -80,6 +80,10 @@ export const BacktestingView: React.FC = () => {
 
       const rawCandles = await fetchStockKlines(symbol, timeframe, candleCount);
       const closedCandles = stripFormingCandle(rawCandles, timeframe);
+      if (closedCandles.length < 30) {
+        alert(`มีแท่งเทียนปิดแล้ว ${closedCandles.length} แท่ง แต่ Backtest ต้องใช้อย่างน้อย 30 แท่ง`);
+        return;
+      }
       const backtestResult = runBacktestSimulation(closedCandles, {
         symbol,
         timeframe,
@@ -104,7 +108,7 @@ export const BacktestingView: React.FC = () => {
       setResult(backtestResult);
     } catch (err) {
       console.error('Backtest calculation error:', err);
-      alert('เกิดข้อผิดพลาดขณะรัน Backtest');
+      alert(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดขณะรัน Backtest');
     } finally {
       setIsLoading(false);
     }
@@ -140,6 +144,7 @@ export const BacktestingView: React.FC = () => {
     setMarketResults([]);
 
     const results: BacktestResult[] = [];
+    let firstDataError: string | null = null;
     let completed = 0;
 
     try {
@@ -162,6 +167,14 @@ export const BacktestingView: React.FC = () => {
             try {
               const rawCandles: KlineData[] = await fetchStockKlines(sym, timeframe, candleCount);
               const closedCandles = stripFormingCandle(rawCandles, timeframe);
+              if (closedCandles.length < 30) {
+                if (!firstDataError) {
+                  firstDataError = closedCandles.length === 0
+                    ? `ไม่พบแท่งเทียนของ ${sym}; ตรวจ DASHBOARD_TOKEN และแหล่งข้อมูลหุ้นบน Host`
+                    : `${sym} มีเพียง ${closedCandles.length} แท่ง ซึ่งน้อยกว่าขั้นต่ำ 30 แท่ง`;
+                }
+                return null;
+              }
               return runBacktestSimulation(closedCandles, {
                 symbol: sym,
                 timeframe,
@@ -179,6 +192,7 @@ export const BacktestingView: React.FC = () => {
               });
             } catch (err) {
               console.error(`Backtest failed for ${sym}:`, err);
+              if (!firstDataError && err instanceof Error) firstDataError = err.message;
               return null;
             }
           })
@@ -193,9 +207,12 @@ export const BacktestingView: React.FC = () => {
       }
 
       setMarketResults(results);
+      if (results.length === 0 && firstDataError) {
+        alert(`ไม่สามารถดึงข้อมูลหุ้นมาทำ Backtest ได้: ${firstDataError}`);
+      }
     } catch (err) {
       console.error('Market backtest error:', err);
-      alert('เกิดข้อผิดพลาดขณะรัน Backtest ทั้งตลาด');
+      alert(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดขณะรัน Backtest ทั้งตลาด');
     } finally {
       setIsMarketLoading(false);
     }

@@ -1,6 +1,27 @@
 import { KlineData, StockTicker24h, OrderBookData, Timeframe, SettradeApiKeys } from '../types';
 import { apiFetch } from './apiFetch';
 
+export class StockApiError extends Error {
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = 'StockApiError';
+    this.status = status;
+  }
+}
+
+function getStockApiErrorMessage(status: number, serverMessage?: string): string {
+  if (status === 503 && serverMessage?.includes('DASHBOARD_TOKEN')) {
+    return 'เซิร์ฟเวอร์ยังไม่ได้ตั้งค่า DASHBOARD_TOKEN ใน Host';
+  }
+  if (status === 401) {
+    return 'DASHBOARD_TOKEN ไม่ถูกต้องหรือยังไม่ได้กรอกใน การตั้งค่า > Security';
+  }
+  const detail = serverMessage ? `: ${serverMessage}` : '';
+  return `เรียก API หุ้นไม่สำเร็จ (HTTP ${status})${detail}`;
+}
+
 /**
  * Normalizes Thai symbols for the SET data proxy. Yahoo index tickers retain
  * their leading caret (e.g. ^SET.BK -> ^SET) so the server can append .BK.
@@ -86,13 +107,15 @@ export async function fetchStockKlines(
     const response = await apiFetch(
       `/api/stock/klines?symbol=${encodeURIComponent(friendlySymbol)}&resolution=${resolution}&from=${from}&to=${to}`
     );
+    const data = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(`Failed to fetch Stock Klines: ${response.statusText}`);
+      throw new StockApiError(
+        getStockApiErrorMessage(response.status, typeof data?.error === 'string' ? data.error : undefined),
+        response.status
+      );
     }
 
-    const data = await response.json();
-
-    if (data.s !== 'ok' || !Array.isArray(data.t)) {
+    if (!data || data.s !== 'ok' || !Array.isArray(data.t)) {
       return [];
     }
 
@@ -105,8 +128,10 @@ export async function fetchStockKlines(
       volume: parseFloat(data.v[i]),
     }));
   } catch (error) {
+    if (error instanceof StockApiError) throw error;
     console.error('Error fetching Stock Klines:', error);
-    return [];
+    const detail = error instanceof Error ? ` (${error.message})` : '';
+    throw new StockApiError(`เชื่อมต่อ API ราคาหุ้นไม่ได้${detail}`);
   }
 }
 

@@ -13,7 +13,7 @@ export function dashboardAuth(
   next: express.NextFunction
 ) {
   const expected = process.env.DASHBOARD_TOKEN;
-  if (req.path === '/health') return next(); // keep health check public
+  if (req.path === '/health' || req.path.startsWith('/stock')) return next(); // keep health check and public market data accessible
   if (!expected) {
     if (process.env.NODE_ENV !== 'production') return next();
     return res.status(503).json({ error: 'Dashboard API is locked: configure DASHBOARD_TOKEN on the server.' });

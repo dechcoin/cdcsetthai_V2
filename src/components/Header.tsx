@@ -274,7 +274,18 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           ) : tickerStatus === 'error' ? (
             <div className="flex items-center space-x-3 text-xs py-1.5">
-              <span className="text-amber-400 font-semibold">⚠️ ดึงราคาหุ้นไม่สำเร็จ</span>
+              <span
+                className="text-amber-400 font-semibold"
+                title="ตรวจ DASHBOARD_TOKEN บน Host และกรอกรหัสเดียวกันใน การตั้งค่า > Security"
+              >
+                ⚠️ API หุ้นไม่พร้อม
+              </span>
+              <button
+                onClick={onOpenSettings}
+                className="text-cyan-300 hover:text-cyan-200 underline underline-offset-2 font-semibold cursor-pointer"
+              >
+                ตั้งค่า
+              </button>
               <button
                 onClick={onRetryTickers}
                 className="text-emerald-400 hover:text-emerald-300 underline underline-offset-2 font-semibold cursor-pointer"
