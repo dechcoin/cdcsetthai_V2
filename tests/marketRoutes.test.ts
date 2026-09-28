@@ -36,6 +36,37 @@ test('unsupported order book and broker endpoints return explicit 501, never fak
   });
 });
 
+test('market data route preserves ^SET.BK when requesting Yahoo index candles', async () => {
+  const originalFetch = globalThis.fetch;
+  let yahooUrl = '';
+  await withServer(async (baseUrl) => {
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestedUrl = String(input);
+      if (requestedUrl.startsWith(baseUrl)) return originalFetch(input, init);
+      yahooUrl = requestedUrl;
+      return new Response(JSON.stringify({
+        chart: {
+          result: [{
+            timestamp: [1_735_689_600],
+            indicators: { quote: [{ open: [1_400], high: [1_410], low: [1_390], close: [1_405], volume: [0] }] },
+          }],
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+
+    try {
+      const response = await originalFetch(
+        `${baseUrl}/api/stock/klines?symbol=%5ESET&resolution=1D&from=1735603200&to=1735776000`
+      );
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).s, 'ok');
+      assert.match(yahooUrl, /chart\/%5ESET\.BK\?interval=1d/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 test('manual order in a persisted Live mode is rejected instead of mutating Paper balances', async () => {
   const state = getServerState();
   const previousMode = state.botConfig.mode;

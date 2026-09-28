@@ -26,6 +26,14 @@ import {
 import { Play, TrendingUp, Award, AlertTriangle, ArrowUpRight, ArrowDownRight, RefreshCw, BarChart2, Layers, Loader2, ShieldCheck } from 'lucide-react';
 
 type MarketUniverse = 'ALL_MARKET' | 'SET50' | 'SET100' | 'SSET' | 'MAI' | 'WATCHLIST';
+type BenchmarkSymbol = '^SET.BK' | 'TDEX' | 'BSET100' | 'NONE';
+
+const BENCHMARK_LABELS: Record<BenchmarkSymbol, string> = {
+  '^SET.BK': 'SET Index (^SET.BK)',
+  TDEX: 'TDEX (SET50 ETF)',
+  BSET100: 'BSET100 (SET100 ETF)',
+  NONE: 'ปิด Benchmark',
+};
 
 export const BacktestingView: React.FC = () => {
   const [mode, setMode] = useState<'SINGLE' | 'ALL_MARKET'>('SINGLE');
@@ -40,7 +48,7 @@ export const BacktestingView: React.FC = () => {
   const [otherFeePercent, setOtherFeePercent] = useState<number | string>(0);
   const [slippagePercent, setSlippagePercent] = useState<number | string>(0.1);
   const [minNotionalThb, setMinNotionalThb] = useState<number | string>(0);
-  const [benchmarkSymbol, setBenchmarkSymbol] = useState<'TDEX' | 'BSET100' | 'NONE'>('TDEX');
+  const [benchmarkSymbol, setBenchmarkSymbol] = useState<BenchmarkSymbol>('^SET.BK');
 
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
@@ -78,6 +86,7 @@ export const BacktestingView: React.FC = () => {
         initialCapital: numInitialCapital,
         stopLossPct: numStopLossPct,
         takeProfitPct: numTakeProfitPct,
+        benchmarkName: benchmarkSymbol,
         directionMode: 'LONG_ONLY',
         buyZone,
         feePercent: Number(feePercent) || 0,
@@ -159,6 +168,7 @@ export const BacktestingView: React.FC = () => {
                 initialCapital: numInitialCapital,
                 stopLossPct: numStopLossPct,
                 takeProfitPct: numTakeProfitPct,
+                benchmarkName: benchmarkSymbol,
                 directionMode: 'LONG_ONLY',
                 buyZone,
                 feePercent: Number(feePercent) || 0,
@@ -420,13 +430,15 @@ export const BacktestingView: React.FC = () => {
             <label className="text-slate-300 font-medium block mb-1">Benchmark ตลาด (ดัชนีชี้วัด)</label>
             <select
               value={benchmarkSymbol}
-              onChange={(e) => setBenchmarkSymbol(e.target.value as any)}
+              onChange={(e) => setBenchmarkSymbol(e.target.value as BenchmarkSymbol)}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-amber-400 font-bold font-mono focus:border-amber-500"
             >
-              <option value="TDEX">TDEX (SET50 ETF - Benchmark หุ้นไทย ⭐)</option>
+              <option value="^SET.BK">^SET.BK (SET Index - ดัชนีตลาดโดยตรง ⭐)</option>
+              <option value="TDEX">TDEX (SET50 ETF - Proxy)</option>
               <option value="BSET100">BSET100 (SET100 ETF)</option>
               <option value="NONE">ไม่เปรียบเทียบ Benchmark</option>
             </select>
+            <span className="mt-1 block text-[10px] text-slate-500">^SET.BK เป็นดัชนีราคา ไม่รวมปันผลแบบ TRI; TDEX/BSET100 เป็น ETF proxy</span>
           </div>
 
           {/* Buy Trigger Zone */}
@@ -646,7 +658,7 @@ export const BacktestingView: React.FC = () => {
 
             {/* Benchmark Return Card */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1">
-              <span className="text-[10px] text-slate-400 block font-medium">Benchmark ({benchmarkSymbol})</span>
+              <span className="text-[10px] text-slate-400 block font-medium">Benchmark ({BENCHMARK_LABELS[result.benchmarkName as BenchmarkSymbol] ?? result.benchmarkName})</span>
               <div
                 className={`text-lg font-extrabold font-mono ${
                   result.benchmarkReturnPercent !== null && result.benchmarkReturnPercent >= 0
@@ -662,8 +674,8 @@ export const BacktestingView: React.FC = () => {
               </div>
               <span className="text-[10px] text-slate-500 block">
                 {result.excessReturnPercent !== null
-                  ? `Alpha: ${result.excessReturnPercent >= 0 ? '+' : ''}${result.excessReturnPercent}%`
-                  : 'ดัชนีตลาดหุ้นไทย'}
+                  ? `Excess: ${result.excessReturnPercent >= 0 ? '+' : ''}${result.excessReturnPercent}%`
+                  : result.benchmarkName === 'NONE' ? 'ปิด benchmark' : 'ข้อมูล benchmark ไม่ครบ/ไม่พบ'}
               </span>
             </div>
 
@@ -766,7 +778,7 @@ export const BacktestingView: React.FC = () => {
                   <span className={`px-2 py-0.5 rounded font-bold ${
                     result.excessReturnPercent >= 0 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'
                   }`}>
-                    Alpha: {result.excessReturnPercent >= 0 ? '+' : ''}{result.excessReturnPercent}%
+                    Excess: {result.excessReturnPercent >= 0 ? '+' : ''}{result.excessReturnPercent}%
                   </span>
                 )}
               </div>
@@ -801,15 +813,15 @@ export const BacktestingView: React.FC = () => {
                     name={`พอร์ต CDC Bot (${result.totalReturnPercent >= 0 ? '+' : ''}${result.totalReturnPercent}%)`}
                   />
                   {result.equityCurve.some((p) => p.benchmarkEquity !== undefined) && (
-                    <Line
-                      type="monotone"
-                      dataKey="benchmarkEquity"
+                  <Line
+                    type="monotone"
+                    dataKey="benchmarkEquity"
                       stroke="#f59e0b"
                       strokeWidth={1.75}
                       strokeDasharray="4 4"
                       dot={false}
-                      name={`Benchmark ตลาด (${benchmarkSymbol}) (${result.benchmarkReturnPercent !== null && result.benchmarkReturnPercent >= 0 ? '+' : ''}${result.benchmarkReturnPercent ?? 0}%)`}
-                    />
+                    name={`Benchmark ตลาด (${BENCHMARK_LABELS[result.benchmarkName as BenchmarkSymbol] ?? result.benchmarkName}) (${result.benchmarkReturnPercent === null ? 'N/A' : `${result.benchmarkReturnPercent >= 0 ? '+' : ''}${result.benchmarkReturnPercent}%`})`}
+                  />
                   )}
                   <Line
                     type="monotone"

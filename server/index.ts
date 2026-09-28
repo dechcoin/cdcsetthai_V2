@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import helmet from 'helmet';
 import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
@@ -82,18 +83,28 @@ if (RENDER_APP_URL) {
 // ==================== VITE & SERVER LAUNCH ====================
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  const possibleDistDirs = [
+    __dirname,
+    path.join(process.cwd(), 'dist'),
+    path.join(__dirname, '..', 'dist'),
+    path.join(__dirname, 'dist'),
+  ];
+  const distPath = possibleDistDirs.find((d) => fs.existsSync(path.join(d, 'index.html')));
+
+  if (!distPath && process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
+  } else if (distPath) {
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
+  } else {
+    console.error('Neither Vite dev server nor built dist directory could be initialized.');
   }
 
   // Start the 24/7 automated trading loop once the HTTP layer is ready.

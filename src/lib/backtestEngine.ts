@@ -22,6 +22,7 @@ export interface BacktestParams {
   minNotionalThb?: number;
   /** Optional benchmark candles. Prefer a total-return index for SET studies. */
   benchmarkCandles?: KlineData[];
+  benchmarkName?: string;
   riskFreeRateAnnualPercent?: number;
 }
 
@@ -151,9 +152,6 @@ export function runBacktestSimulation(
         if (c.time <= firstTime && c.close > 0) {
           benchmarkStartPrice = c.close;
         }
-      }
-      if (benchmarkStartPrice === null) {
-        benchmarkStartPrice = params.benchmarkCandles[0].close;
       }
     }
   }
@@ -345,6 +343,7 @@ export function runBacktestSimulation(
 
   return {
     symbol: params.symbol,
+    benchmarkName: params.benchmarkName ?? 'Benchmark',
     timeframe: params.timeframe,
     initialCapital: params.initialCapital,
     finalCapital: Number(finalCapital.toFixed(2)),

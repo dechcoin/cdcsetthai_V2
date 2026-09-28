@@ -67,6 +67,36 @@ test('charges the configured fee and adverse slippage on both sides', () => {
   assert.ok(result.monteCarlo);
 });
 
+test('normalizes benchmark equity to initial capital and records its label', () => {
+  const candles = candlesForNextOpenFill();
+  const benchmarkCandles = candles.map((candle, index) => ({
+    ...candle,
+    open: 1_500 + index,
+    high: 1_502 + index,
+    low: 1_498 + index,
+    close: 1_500 + index,
+  }));
+  const result = runBacktestSimulation(candles, {
+    symbol: 'PTT',
+    timeframe: '1d',
+    initialCapital: 100_000,
+    stopLossPct: 5,
+    takeProfitPct: 10,
+    directionMode: 'LONG_ONLY',
+    buyZone: 'BLUE',
+    feePercent: 0,
+    slippagePercent: 0,
+    benchmarkName: '^SET.BK',
+    benchmarkCandles,
+  });
+
+  assert.ok(result);
+  assert.equal(result.benchmarkName, '^SET.BK');
+  assert.equal(result.equityCurve[0].benchmarkEquity, 100_000);
+  assert.ok(result.equityCurve.at(-1)?.benchmarkEquity);
+  assert.notEqual(result.benchmarkReturnPercent, null);
+});
+
 test('uses 50-share SET board lots only when six months of known daily closes qualify', () => {
   const history: KlineData[] = Array.from({ length: 230 }, (_, index) => ({
     time: Date.UTC(2025, 0, 1 + index),

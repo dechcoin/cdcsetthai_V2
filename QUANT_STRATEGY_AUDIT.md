@@ -294,15 +294,15 @@ $$\text{Effective Score} = \text{Clamp}_{0-100}\Big(\text{Base Score} \times \te
 
 ### สถานะผลเชิงประจักษ์
 
-- เพิ่ม metrics และช่อง benchmark optional ใน engine แล้ว แต่หน้า Backtest ยังไม่ได้ดึง SET50 TRI/SET TRI; Buy & Hold ที่เห็นเป็น price-only ของหุ้นตัวนั้น ไม่รวมเงินปันผล/สิทธิ จึงห้ามเรียกว่า alpha/excess เทียบตลาด
-- benchmark metrics คำนวณได้เมื่อ caller ส่ง benchmark candles ที่ตรงกับวันของ equity curve ครบเท่านั้น; ใช้ SET TRI หากต้องการ total-return comparator เพราะ TRI รวม capital gain/loss, rights และ dividend ที่นำกลับลงทุน [นิยาม SET TRI](https://www.set.or.th/en/market/index/tri/profile)
+- หน้า Backtest ดึง `^SET.BK` เป็นค่าเริ่มต้นและวาด equity เทียบ benchmark ที่ normalize ด้วยเงินทุนเริ่มต้น; มี TDEX/BSET100 เป็น ETF proxy ให้เลือกและปิด benchmark ได้ สัญลักษณ์ดัชนีถูกส่งผ่าน client โดยคง `^` และ URL-encode ก่อน server แปลงเป็น Yahoo ticker
+- `^SET.BK` เป็น SET price index ไม่ใช่ SET TRI และไม่รวมปันผล; benchmark metrics คำนวณได้เมื่อ benchmark candles ตรงวันของ equity curve ครบเท่านั้น จึงควรใช้ SET TRI หากต้องการ total-return comparator เพราะ TRI รวม capital gain/loss, rights และ dividend ที่นำกลับลงทุน [นิยาม SET TRI](https://www.set.or.th/en/market/index/tri/profile)
 - ไม่มีไฟล์ OHLCV/benchmark ที่จัดเตรียมไว้ใน repo ณ วันที่ตรวจ และหน้า backtest ปัจจุบันโหลดข้อมูลตาม provider ที่มีข้อจำกัดจำนวนแท่ง; จึง **ยังไม่ได้รัน baseline เทียบ upgraded, 5-fold OOS, regime breakdown, sensitivity, DSR หรือ White Reality Check** และไม่มีค่าผลตอบแทนใดในเอกสารนี้เป็นหลักฐานว่าชนะตลาด
 - VAT 7% ถูกแยกจาก commission/service fee ตามหน้าอธิบายภาษีของ SET; อัตราค่าคอมมิชชัน/ค่าธรรมเนียมอื่นยังขึ้นกับบัญชีและโบรกเกอร์ [ภาษีและ VAT ของ SET](https://www.set.or.th/en/market/information/tax)
-- Verification รอบนี้: `bun run test` ผ่าน 31 tests, `bun run lint` ผ่าน, `bun run build` ผ่าน; Vite ยังเตือน JS bundle ขนาดประมาณ 1.06 MB เกิน 500 KB ซึ่งเป็น warning ด้าน code-splitting ไม่ใช่ build failure
+- Verification ล่าสุดหลังต่อ Yahoo `^SET.BK`: `bun run test` ผ่าน 36 tests, `bun run lint` ผ่าน, `bun run build` ผ่าน; มี unit/integration tests ยืนยัน caret preservation, request URL, Yahoo index route และ benchmark equity normalization. Vite ยังเตือน JS bundle ขนาดประมาณ 1.08 MB เกิน 500 KB ซึ่งเป็น warning ด้าน code-splitting ไม่ใช่ build failure
 
 ### Roadmap 3 เฟส
 
-1. **Quick win — เสร็จบางส่วน:** เพิ่มต้นทุน VAT/ค่าบริการ, tick/lot/min-notional controls, net-liquidation equity curve, Sharpe/Sortino/Calmar/Expectancy/Turnover/ADV proxy, optional benchmark, fold planner, trade-bootstrap diagnostic และ unit tests โดยไม่เปลี่ยน CDC entry/exit/score
+1. **Quick win — เสร็จบางส่วน:** เพิ่มต้นทุน VAT/ค่าบริการ, tick/lot/min-notional controls, net-liquidation equity curve, Sharpe/Sortino/Calmar/Expectancy/Turnover/ADV proxy, `^SET.BK` benchmark และ ETF proxies พร้อมกราฟเทียบ, fold planner, trade-bootstrap diagnostic และ unit tests โดยไม่เปลี่ยน CDC entry/exit/score
 2. **Core alpha — ยังไม่เริ่มจนกว่าจะมีข้อมูล:** เตรียม survivorship-aware SET100/TRI/dividend/corporate-action data และต้นทุนจริง; รัน baseline ก่อน จากนั้นทดสอบทีละสมมติฐาน (GREEN+Golden Cross freshness, swing-low/ATR location, MTF, liquidity, exits/sizing) ด้วย validation และ walk-forward OOS ≥5 folds พร้อม regime, slippage/parameter sensitivity และ ablation; ห้ามนำคะแนน/indicator ใหม่เข้า live path ก่อนผลครบ
 3. **Production hardening — ยังเหลือ:** ต่อ benchmark/data provenance, board-lot effective-date master, delisted/suspended/price-limit handling, market-impact/capacity, reproducible run manifests, slippage scenarios, block bootstrap/DSR หรือ White Reality Check และ independent review ก่อนอนุมัติ Paper/Live
 

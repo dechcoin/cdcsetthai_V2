@@ -2,11 +2,16 @@ import { KlineData, StockTicker24h, OrderBookData, Timeframe, SettradeApiKeys } 
 import { apiFetch } from './apiFetch';
 
 /**
- * Normalizes Thai stock symbol for Yahoo Finance or SET API format (e.g. PTT -> PTT.BK)
+ * Normalizes Thai symbols for the SET data proxy. Yahoo index tickers retain
+ * their leading caret (e.g. ^SET.BK -> ^SET) so the server can append .BK.
  */
 export function toStockSymbol(symbol: string): string {
-  const clean = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return clean || 'PTT';
+  const upper = symbol.trim().toUpperCase();
+  const isIndex = upper.startsWith('^');
+  const body = (isIndex ? upper.slice(1) : upper).replace(/\.BK$/i, '');
+  const clean = body.replace(/[^A-Z0-9]/g, '');
+  if (!clean) return 'PTT';
+  return isIndex ? `^${clean}` : clean;
 }
 
 export function toFriendlySymbol(symbol: string): string {
@@ -79,7 +84,7 @@ export async function fetchStockKlines(
 
   try {
     const response = await apiFetch(
-      `/api/stock/klines?symbol=${friendlySymbol}&resolution=${resolution}&from=${from}&to=${to}`
+      `/api/stock/klines?symbol=${encodeURIComponent(friendlySymbol)}&resolution=${resolution}&from=${from}&to=${to}`
     );
     if (!response.ok) {
       throw new Error(`Failed to fetch Stock Klines: ${response.statusText}`);

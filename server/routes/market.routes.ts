@@ -15,6 +15,16 @@ export const marketRouter = express.Router();
 
 const handleKlines = async (req: express.Request, res: express.Response) => {
   try {
+    const resolution = String(req.query.resolution || '1D').trim();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const requestedTo = Number(req.query.to);
+    const to = Number.isFinite(requestedTo) && requestedTo > 0
+      ? Math.min(requestedTo, nowSeconds)
+      : nowSeconds;
+    const requestedFrom = Number(req.query.from);
+    const from = Number.isFinite(requestedFrom) && requestedFrom > 0 && requestedFrom < to
+      ? requestedFrom
+      : to - 750 * 24 * 60 * 60;
     const rawSymbol = String(req.query.symbol || 'PTT').trim();
     const isIndex = rawSymbol.startsWith('^');
     const symbolWithoutIndex = isIndex ? rawSymbol.slice(1) : rawSymbol;

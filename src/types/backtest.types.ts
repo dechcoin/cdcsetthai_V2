@@ -27,6 +27,7 @@ export interface BacktestTrade {
 
 export interface BacktestResult {
   symbol: string;
+  benchmarkName: string;
   timeframe: Timeframe;
   initialCapital: number;
   finalCapital: number;
